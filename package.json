@@ -1,0 +1,16 @@
+{
+  "name": "tiny-dash",
+  "version": "0.1.0",
+  "private": true,
+  "description": "E-ink dashboard system with multi-module monorepo",
+  "scripts": {
+    "build": "nx run-many --target=build --all",
+    "test": "nx run-many --target=test --all",
+    "lint": "nx run-many --target=lint --all"
+  },
+  "devDependencies": {
+    "@nx-go/nx-go": "^2.6.0",
+    "@nx/workspace": "^22.2.7",
+    "nx": "^22.2.7"
+  }
+}

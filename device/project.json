@@ -1,0 +1,29 @@
+{
+  "name": "device",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "device",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash tools/build.sh",
+        "cwd": "device"
+      }
+    },
+    "upload": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tinygo flash -target=pico2 ./cmd/device/main.go",
+        "cwd": "device"
+      }
+    },
+    "monitor": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tinygo monitor",
+        "cwd": "device"
+      }
+    }
+  }
+}
