@@ -17,6 +17,12 @@ type Display interface {
 
 	// Height returns the display height in pixels
 	Height() int
+
+	// SupportedColors returns the list of colors supported by this display
+	SupportedColors() []Color
+
+	// SupportsColor checks if the display supports a specific color
+	SupportsColor(color Color) bool
 }
 
 // Framebuffer provides pixel-level access to the display buffer

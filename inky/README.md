@@ -1,101 +1,137 @@
 # Inky Library
 
-TinyGo library for the Inky Impression 7.3" Spectra 6 (2025 Edition) e-ink display.
+TinyGo library for Pimoroni Inky e-ink displays with hardware abstraction and auto-detection support.
 
 ## Overview
 
-This is a standalone Go/TinyGo library that provides a simple, auto-configuring interface for the Inky Impression 7.3" Spectra 6 display with the e640 controller. The library handles all SPI and GPIO configuration automatically, providing a zero-configuration API for easy use.
+This is a standalone Go/TinyGo library that provides a clean, hardware-abstracted interface for Pimoroni Inky e-ink displays. The library supports multiple display types and can automatically detect the connected display via EEPROM.
 
 ## Features
 
-- ✅ **Zero Configuration** - Just call `NewSpectra6()` and you're ready to go
-- ✅ **Auto-configured Pins** - Fixed pin assignments for the Inky PCB
-- ✅ **6-Color Support** - Black, White, Red, Yellow, Blue, Green
-- ✅ **Simple API** - Minimal, clean interface
+- ✅ **Hardware Abstraction** - Works with any hardware through interface-based design
+- ✅ **Auto-Detection** - Automatically identifies display type via EEPROM
+- ✅ **Multiple Displays** - Support for various Inky display models (E640, E673, and more coming)
+- ✅ **Color Validation** - Displays report supported colors, with runtime validation
+- ✅ **6-Color Support** - Black, White, Red, Yellow, Blue, Green (Spectra 6 displays)
+- ✅ **Simple API** - Minimal, clean interface with framebuffer access
 - ✅ **TinyGo Native** - Built specifically for embedded hardware
-- ✅ **Standalone Library** - No external dependencies
+- ✅ **Zero Dependencies** - No external dependencies beyond TinyGo
 
-## Hardware Specifications
+## Supported Displays
 
-**Display:** Inky Impression 7.3" Spectra 6 (2025 Edition)  
-**Controller:** e640  
-**Resolution:** 800×480 pixels  
-**Colors:** 6 (Black, White, Red, Yellow, Blue, Green)  
-**Refresh Time:** ~30-40 seconds (hardware limited)  
-**Interface:** SPI + GPIO control pins
+### Currently Implemented
+- **E673** - Spectra 6 7.3" 800×480 (variant 22)
+- **E640** - Spectra 6 4.0" 400×600 (variant 25)
 
-## Pin Assignments
+### Coming Soon
+- InkyPHAT - 212×104 (variants 1, 4, 5)
+- InkyWHAT - 400×300 (variants 2, 3, 6, 7, 8)
+- InkyPHAT_SSD1608 - 212×104 (variants 10, 11, 12)
+- InkyWHAT_SSD1683 - 400×300 (variants 17, 18, 19)
+- InkyUC8159 - 7-color displays (variants 14, 15, 16)
+- InkyAC073TC1A - 7-color 800×480 (variant 20)
+- InkyEL133UF1 - Spectra 6 13.3" 1600×1200 (variant 21)
+- InkyJD79661 - pHAT 250×122 (variant 23)
+- InkyJD79668 - wHAT 400×300 (variant 24)
 
-### Hard Stuff Pico to Pi Adapter Configuration
+## Hardware Abstraction
 
-When using the Pico 2 W with the Hard Stuff Pico to Pi adapter, the pins are mapped from Raspberry Pi HAT pins to Pico GPIO:
+The library uses interfaces for hardware access, allowing it to work with different hardware backends:
 
-| Function | RPi GPIO | Pico GPIO | Status |
-|----------|----------|-----------|--------|
-| CS | 8 (CE0) | **GP8** | ✅ Confirmed |
-| DC | 22 | **GP6** | ✅ Confirmed |
-| RST | 27 | **GP27** | ⚠️ Verify with hardware |
-| BUSY | 17 | **GP17** | ✅ Confirmed |
-| CLK | 11 | SPI0 CLK | Auto-configured |
-| MOSI | 10 | SPI0 MOSI | Auto-configured |
-| GND | - | GND | Ground |
-| 3V3 | - | 3V3 | Power (3.3V) |
+- **Pin Interface** - GPIO operations (configure, set, get)
+- **I2C Interface** - For EEPROM reading
+- **SPI Interface** - For display communication
 
-**Important Notes:**
-- CS, DC, and BUSY pins have been confirmed with hardware
-- RST pin (GP27) needs verification - if display doesn't initialize, try other pins
-- The adapter uses Arduino pin numbering in its header, but these are the actual Pico GPIO mappings
+### Included Adapters
 
-### Direct Connection (Without Adapter)
-
-If connecting the Inky display directly to a Pico (not using the adapter):
-- CS: GP8, DC: GP22, RST: GP27, BUSY: GP17
+**Pico2 + PicoToPi HAT Adapter**
+- For Raspberry Pi Pico 2 W with Hard Stuff Pico-to-Pi adapter
+- Pre-configured pin mappings matching Pimoroni's specifications
+- Located in `adapters/pico2_picotopi.go`
 
 ## Installation
 
-This library is part of the tiny-dash monorepo. To use it in your own project:
-
 ```bash
-# Add as a dependency in your go.mod
 go get github.com/thiemok/tiny-dash/inky
 ```
 
 ## Usage
 
-### Basic Example
+### Auto-Detection (Recommended)
+
+The easiest way to use the library is with auto-detection:
 
 ```go
 package main
 
 import (
     "github.com/thiemok/tiny-dash/inky/pkg/inky"
+    "github.com/thiemok/tiny-dash/inky/pkg/inky/adapters"
 )
 
 func main() {
-    // Create display - automatically configures everything!
-    display, err := inky.NewSpectra6()
+    // Configure hardware adapter
+    hardware, err := adapters.NewPico2PicoToPiHardware()
     if err != nil {
-        println("Error:", err.Error())
-        return
+        panic(err)
     }
 
-    // Create an image (800x480 bytes, values 0-6 for colors)
-    image := make([]byte, inky.Width*inky.Height)
-    
-    // Fill with white
-    for i := range image {
-        image[i] = byte(inky.White)
+    // Auto-detect and initialize display
+    display, err := inky.Auto(*hardware)
+    if err != nil {
+        panic(err)
     }
-    
-    // Set the image
-    display.SetImage(image)
-    
-    // Refresh the display (takes ~30-40 seconds)
-    display.Refresh()
+
+    // Use the display
+    display.Clear(inky.White)
+    display.Update()
 }
 ```
 
-### Color Constants
+### Manual Display Selection
+
+If you know your display type or EEPROM reading fails:
+
+```go
+// For 7.3" Spectra 6 (E673)
+display, err := inky.NewE673(*hardware)
+
+// For 4.0" Spectra 6 (E640)
+display, err := inky.NewE640(*hardware)
+```
+
+### Working with the Framebuffer
+
+```go
+// Get framebuffer
+fb := display.GetFramebuffer()
+
+// Draw pixels
+for y := 0; y < display.Height(); y++ {
+    for x := 0; x < display.Width(); x++ {
+        fb.SetPixel(x, y, inky.Black)
+    }
+}
+
+// Update display (transfer + refresh)
+display.Update()
+```
+
+### Color Support
+
+Check which colors a display supports:
+
+```go
+// Get list of supported colors
+colors := display.SupportedColors()
+
+// Check if a specific color is supported
+if display.SupportsColor(inky.Blue) {
+    fb.SetPixel(x, y, inky.Blue)
+}
+```
+
+### Available Colors
 
 ```go
 inky.Black   // 0
@@ -106,23 +142,50 @@ inky.Blue    // 5
 inky.Green   // 6
 ```
 
-### API Reference
+Note: Not all displays support all colors. E640 and E673 support all 6 colors (Spectra 6), while older displays may only support 3 colors (black, white, red/yellow).
 
-#### `NewSpectra6() (*Display, error)`
-Creates and initializes a new Inky Impression 7.3" Spectra 6 display. Automatically configures SPI and GPIO pins.
+## API Reference
 
-#### `SetImage(data []byte) error`
-Sets the image buffer. Data must be `Width * Height` bytes (800×480 = 384,000 bytes), with each byte representing a color value (0-6).
+### Display Interface
 
-#### `Refresh() error`
-Updates the display with the current buffer. This operation takes approximately 30-40 seconds due to the e-ink refresh process.
+All display types implement this interface:
 
-#### `Clear(color Color) error`
-Clears the entire display to a single color and transfers the image. You still need to call `Refresh()` to update the display.
+```go
+type Display interface {
+    GetFramebuffer() Framebuffer
+    Update() error
+    Clear(color Color)
+    Width() int
+    Height() int
+    SupportedColors() []Color
+    SupportsColor(color Color) bool
+}
+```
+
+### Key Functions
+
+- `Auto(config HardwareConfig) (Display, error)` - Auto-detect and initialize display
+- `NewE673(config HardwareConfig) (*E673Display, error)` - Create E673 display
+- `NewE640(config HardwareConfig) (*E640Display, error)` - Create E640 display
+- `ReadEEPROM(i2c I2C) (*EEPROMData, error)` - Read display EEPROM
+
+### Hardware Configuration
+
+```go
+type HardwareConfig struct {
+    SPI  SPI  // SPI bus for display
+    I2C  I2C  // I2C bus for EEPROM
+    CS   Pin  // Chip Select
+    DC   Pin  // Data/Command
+    RST  Pin  // Reset
+    BUSY Pin  // Busy signal
+}
+```
 
 ## Building
 
-### Build Library Only
+### Build Library
+
 ```bash
 nx build inky
 # or
@@ -130,6 +193,7 @@ cd inky && bash tools/build.sh
 ```
 
 ### Build Example Program
+
 ```bash
 nx build-example inky
 # or
@@ -138,7 +202,8 @@ cd inky && bash tools/build.sh example
 
 Output: `inky/dist/example.uf2`
 
-### Upload Example to Pico
+### Upload to Pico
+
 ```bash
 nx upload inky
 ```
@@ -149,75 +214,91 @@ Or manually:
 3. Device will reboot and run the example
 
 ### Monitor Serial Output
+
 ```bash
 nx monitor inky
 # or
 tinygo monitor
 ```
 
-## Example Program
+## Example Programs
 
-The included example program (`cmd/example/main.go`) displays a test pattern with 6 vertical color bars, one for each supported color. This is useful for verifying the display works correctly and demonstrating all 6 colors.
+### Display Example (`cmd/example`)
+
+Displays a test pattern with 6 vertical color bars demonstrating all supported colors.
+
+### EEPROM Reader (`cmd/eeprom-reader`)
+
+Reads and displays EEPROM information from the connected display:
+- Display model and variant
+- Resolution
+- Color type
+- PCB version
+- Raw EEPROM hex dump
 
 ## Image Format
 
-Images must be:
-- **Size:** 800×480 pixels = 384,000 bytes
-- **Format:** 1 byte per pixel
-- **Values:** 0-6 representing colors (Black, White, Yellow, Red, Blue, Green)
-- **Byte Order:** Row-major (left-to-right, top-to-bottom)
-
-Example of setting a single pixel:
-```go
-x, y := 100, 50  // Position
-color := inky.Red
-image[y*inky.Width + x] = byte(color)
-```
+Images use a packed format for memory efficiency:
+- **Format:** 4 bits per pixel (2 pixels per byte)
+- **Values:** 0-6 representing colors
+- **Access:** Use `Framebuffer.SetPixel()` and `GetPixel()` methods
+- **Layout:** Row-major (left-to-right, top-to-bottom)
 
 ## Performance
 
 - **Initialization:** ~1 second
-- **Image Transfer:** <1 second (384 KB over SPI)
-- **Display Refresh:** 30-40 seconds (hardware limitation)
+- **Image Transfer:** <1 second
+- **Display Refresh:** 30-45 seconds (hardware limitation, varies by model)
 - **SPI Speed:** 1 MHz
-- **Memory Usage:** ~384 KB for image buffer
+- **Memory Usage:** ~50% of Pico RAM for large displays (800×480)
 
-## Memory Considerations
+## Creating Custom Adapters
 
-The Raspberry Pi Pico 2 W has 520 KB of RAM. The image buffer uses 384 KB (~74% of RAM), leaving ~136 KB for program code and stack. This is sufficient for the display library and moderate application code.
+To use with different hardware, implement the interfaces:
+
+```go
+type Pin interface {
+    Configure(mode PinMode) error
+    Set(high bool)
+    Get() bool
+}
+
+type I2C interface {
+    Tx(addr uint16, w, r []byte) error
+}
+
+type SPI interface {
+    Tx(w, r []byte) error
+}
+```
+
+See `adapters/pico2_picotopi.go` for a reference implementation.
 
 ## Troubleshooting
 
-### Display not responding
+### Display Not Responding
 - Check all pin connections
 - Verify power supply (3.3V, sufficient current)
-- Try increasing timeout values if needed
+- Ensure correct adapter for your hardware
 
-### Display shows incorrect colors
-- Verify image data uses correct color values (0-6)
-- Check that image size is exactly 384,000 bytes
+### EEPROM Read Fails
+- Confirm I2C is properly configured
+- Check I2C pins (SDA, SCL)
+- Verify display is powered
 
-### Build errors
+### Incorrect Colors
+- Check if color is supported: `display.SupportsColor(color)`
+- Verify you're using the correct display type
+
+### Build Errors
 - Ensure TinyGo is installed: `tinygo version`
-- Check Go version: `go version` (requires 1.25+)
-- Verify you're building with the correct target: `pico-w`
+- Check Go version: `go version` (requires 1.21+)
+- Verify target: `pico` or `pico-w`
 
 ## Reference
 
-This library is a Go/TinyGo port of [Pimoroni's Python inky library](https://github.com/pimoroni/inky), specifically the e640 controller implementation.
+This library is a Go/TinyGo port of [Pimoroni's Python inky library](https://github.com/pimoroni/inky).
 
 ## License
 
 See the main tiny-dash repository for license information.
-
-## Future Work
-
-Support for additional display controllers:
-- e673
-- uc8159
-- ac073tc1a
-- el133uf1
-- jd79661, jd79668
-- ssd1608, ssd1683
-
-See `vendor/pimoroni-inky/` for reference implementations.

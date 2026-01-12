@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/thiemok/tiny-dash/inky/pkg/inky"
+	"github.com/thiemok/tiny-dash/inky/pkg/inky/adapters"
 )
 
 func main() {
@@ -18,16 +19,24 @@ func main() {
 	println("========================================")
 	println()
 
-	// Create and initialize display - auto-configures everything!
-	// Use NewE673() for 7.3" 800x480 display
-	// Use NewE640() for 4.0" 400x600 display
-	println("Initializing display...")
-	display, err := inky.NewE673() // Change to NewE640() if using the E640 display
+	// Configure hardware for Pico 2 W + Pico-to-Pi adapter
+	println("Configuring hardware...")
+	hardware, err := adapters.NewPico2PicoToPiHardware()
+	if err != nil {
+		println("Error: Failed to configure hardware:", err.Error())
+		return
+	}
+	println("✓ Hardware configured successfully")
+	println()
+
+	// Auto-detect and initialize display via EEPROM
+	println("Detecting display via EEPROM...")
+	display, err := inky.Auto(*hardware)
 	if err != nil {
 		println("Error:", err.Error())
 		return
 	}
-	println("✓ Display initialized successfully")
+	println("✓ Display detected and initialized successfully")
 	println()
 
 	// Get framebuffer for pixel access

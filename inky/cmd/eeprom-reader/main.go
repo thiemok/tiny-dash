@@ -3,8 +3,9 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"machine"
 	"time"
+
+	"github.com/thiemok/tiny-dash/inky/pkg/inky/adapters"
 )
 
 // EEPROM constants
@@ -71,24 +72,22 @@ func main() {
 	println("========================================")
 	println()
 
-	// Initialize I2C
-	i2c := machine.I2C1
-	err := i2c.Configure(machine.I2CConfig{
-		Frequency: 100000, // 100 kHz - standard I2C speed
-		SDA:       machine.I2C1_SDA_PIN,
-		SCL:       machine.I2C1_SCL_PIN,
-	})
+	// Configure hardware for Pico 2 W + Pico-to-Pi adapter
+	println("Configuring hardware...")
+	hardware, err := adapters.NewPico2PicoToPiHardware()
 	if err != nil {
-		println("Error: Failed to configure I2C:", err.Error())
+		println("Error: Failed to configure hardware:", err.Error())
 		return
 	}
+	println("✓ Hardware configured successfully")
+	println()
 
 	// Read EEPROM data
 	println("Reading EEPROM at address 0x50...")
 	data := make([]byte, eepromSize)
 
 	// First, write the starting address (0x00) to the EEPROM
-	err = i2c.Tx(eepromAddress, []byte{0x00}, nil)
+	err = hardware.I2C.Tx(eepromAddress, []byte{0x00}, nil)
 	if err != nil {
 		println("Error: Failed to set EEPROM read address:", err.Error())
 		println("(Is the Inky display connected and powered?)")
@@ -99,7 +98,7 @@ func main() {
 	time.Sleep(10 * time.Millisecond)
 
 	// Read the data
-	err = i2c.Tx(eepromAddress, nil, data)
+	err = hardware.I2C.Tx(eepromAddress, nil, data)
 	if err != nil {
 		println("Error: Failed to read EEPROM data:", err.Error())
 		println("(Is the Inky display connected and powered?)")

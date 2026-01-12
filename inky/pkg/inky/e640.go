@@ -2,7 +2,6 @@ package inky
 
 import (
 	"fmt"
-	"time"
 )
 
 // Display constants for Inky Impression 4.0" Spectra 6 (E640)
@@ -11,21 +10,41 @@ const (
 	E640Height = 600
 )
 
+// E640 supported colors (6-color Spectra 6 display)
+var e640SupportedColors = []Color{Black, White, Yellow, Red, Blue, Green}
+
 // E640Display represents an Inky E640 4.0" Spectra 6 e-ink display
 type E640Display struct {
-	spi    *hardwareSPI
-	gpio   *hardwareGPIO
+	config InkyConfig
 	buffer [E640Width * E640Height / 2]byte // Packed format: 2 pixels per byte (4 bits each)
 }
 
 // NewE640 creates and initializes an Inky Impression 4.0" Spectra 6 display (E640)
-// Automatically configures SPI and GPIO with correct pins
-func NewE640() (*E640Display, error) {
+// Accepts a configured InkyConfig with all required interfaces
+func NewE640(config InkyConfig) (*E640Display, error) {
 	display := &E640Display{
-		spi:  initSPI(),
-		gpio: initGPIO(),
+		config: config,
 		// buffer is a fixed-size array, allocated as part of the E640Display struct
 	}
+
+	// Configure pins for this display
+	if err := config.CS.Configure(PinOutput); err != nil {
+		return nil, fmt.Errorf("failed to configure CS pin: %w", err)
+	}
+	if err := config.DC.Configure(PinOutput); err != nil {
+		return nil, fmt.Errorf("failed to configure DC pin: %w", err)
+	}
+	if err := config.RST.Configure(PinOutput); err != nil {
+		return nil, fmt.Errorf("failed to configure RST pin: %w", err)
+	}
+	if err := config.BUSY.Configure(PinInput); err != nil {
+		return nil, fmt.Errorf("failed to configure BUSY pin: %w", err)
+	}
+
+	// Set initial pin states
+	config.CS.Set(true)  // CS idle high
+	config.DC.Set(false) // DC default low
+	config.RST.Set(true) // RST idle high
 
 	// Perform hardware initialization
 	if err := display.init(); err != nil {
@@ -39,10 +58,10 @@ func NewE640() (*E640Display, error) {
 // Based on Pimoroni's Python implementation
 func (d *E640Display) init() error {
 	// Hardware reset
-	d.gpio.reset()
+	reset(d.config.RST)
 
 	// Wait for display to be ready
-	if !d.gpio.busyWait(5) {
+	if !busyWait(d.config.BUSY, 5) {
 		return fmt.Errorf("timeout waiting for display ready after reset")
 	}
 
@@ -88,18 +107,7 @@ func (d *E640Display) init() error {
 
 // sendCommand sends a command with optional data to the display
 func (d *E640Display) sendCommand(command byte, data []byte) {
-	d.gpio.setCS(false)
-	d.gpio.setDC(false)
-	time.Sleep(300 * time.Microsecond)
-	d.spi.transfer([]byte{command})
-
-	if data != nil && len(data) > 0 {
-		d.gpio.setDC(true)
-		d.spi.transfer(data)
-	}
-
-	d.gpio.setCS(true)
-	d.gpio.setDC(false)
+	sendCommand(d.config.SPI, d.config.CS, d.config.DC, command, data)
 }
 
 // GetFramebuffer returns a Framebuffer for pixel-level access to the display buffer
@@ -118,7 +126,7 @@ func (d *E640Display) GetFramebuffer() Framebuffer {
 func (d *E640Display) Update() error {
 	// Power on
 	d.sendCommand(cmdPON, nil)
-	if !d.gpio.busyWait(1) {
+	if !busyWait(d.config.BUSY, 1) {
 		return fmt.Errorf("timeout waiting for power on")
 	}
 
@@ -133,13 +141,13 @@ func (d *E640Display) Update() error {
 
 	// Wait for refresh to complete (E640 takes ~40 seconds)
 	println("Refreshing display (this takes ~40 seconds)...")
-	if !d.gpio.busyWait(45) {
+	if !busyWait(d.config.BUSY, 45) {
 		return fmt.Errorf("timeout waiting for display refresh")
 	}
 
 	// Power off
 	d.sendCommand(cmdPOF, []byte{0x00})
-	if !d.gpio.busyWait(1) {
+	if !busyWait(d.config.BUSY, 1) {
 		return fmt.Errorf("timeout waiting for power off")
 	}
 
@@ -148,6 +156,11 @@ func (d *E640Display) Update() error {
 
 // Clear fills the framebuffer with a single color
 func (d *E640Display) Clear(color Color) {
+	// Validate color is supported
+	if !d.SupportsColor(color) {
+		panic(fmt.Sprintf("E640 does not support color %s (value %d)", color.String(), color))
+	}
+
 	// Pack the color: 2 pixels per byte
 	packed := byte(color<<4) | byte(color)
 	for i := range d.buffer {
@@ -163,4 +176,19 @@ func (d *E640Display) Width() int {
 // Height returns the display height in pixels
 func (d *E640Display) Height() int {
 	return E640Height
+}
+
+// SupportedColors returns the list of colors supported by this display
+func (d *E640Display) SupportedColors() []Color {
+	return e640SupportedColors
+}
+
+// SupportsColor checks if the display supports a specific color
+func (d *E640Display) SupportsColor(color Color) bool {
+	for _, c := range e640SupportedColors {
+		if c == color {
+			return true
+		}
+	}
+	return false
 }
