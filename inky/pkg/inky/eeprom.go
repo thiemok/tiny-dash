@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"time"
+
+	"github.com/thiemok/tiny-dash/inky/pkg/inky/common"
 )
 
 // EEPROM constants
@@ -61,7 +63,7 @@ func (e *EEPROMData) GetVariantName() string {
 // ReadEEPROM reads and parses the EEPROM data from an Inky display
 // The EEPROM contains display identification and configuration information
 // Returns error if the EEPROM cannot be read or the data is invalid
-func ReadEEPROM(i2c I2C) (*EEPROMData, error) {
+func ReadEEPROM(i2c common.I2C) (*EEPROMData, error) {
 	// Allocate buffer for EEPROM data
 	data := make([]byte, eepromSize)
 
@@ -108,4 +110,18 @@ func parseEEPROM(data []byte) (*EEPROMData, error) {
 	}
 
 	return eeprom, nil
+}
+
+// getColorType converts EEPROM color code to colorType string
+func getColorType(colorCode byte) string {
+	switch colorCode {
+	case 1:
+		return "black"
+	case 2:
+		return "red"
+	case 3:
+		return "yellow"
+	default:
+		return "black" // Default to black for unknown color codes
+	}
 }

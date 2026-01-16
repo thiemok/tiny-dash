@@ -1,2 +1,3 @@
 dist/
 *.uf2
+coverage.*

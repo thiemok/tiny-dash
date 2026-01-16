@@ -3,8 +3,9 @@ package main
 import (
 	"time"
 
-	"github.com/thiemok/tiny-dash/inky/pkg/inky"
-	"github.com/thiemok/tiny-dash/inky/pkg/inky/adapters"
+	"github.com/thiemok/tiny-dash/inky/pkg/adapters"
+	inkyCommon "github.com/thiemok/tiny-dash/inky/pkg/inky/common"
+	"github.com/thiemok/tiny-dash/inky/pkg/inky/drivers/e673"
 )
 
 func main() {
@@ -15,7 +16,7 @@ func main() {
 
 	// Print immediately to confirm the program is running
 	println("========================================")
-	println("Inky Impression Spectra 6 Example")
+	println("Inky Impression Example")
 	println("========================================")
 	println()
 
@@ -31,7 +32,8 @@ func main() {
 
 	// Auto-detect and initialize display via EEPROM
 	println("Detecting display via EEPROM...")
-	display, err := inky.Auto(*hardware)
+	//display, err := inky.Auto(*hardware)
+	display, err := e673.New(*hardware)
 	if err != nil {
 		println("Error:", err.Error())
 		return
@@ -39,12 +41,9 @@ func main() {
 	println("✓ Display detected and initialized successfully")
 	println()
 
-	// Get framebuffer for pixel access
-	fb := display.GetFramebuffer()
-	
-	// Generate test pattern (6 vertical color bars)
-	println("Generating test pattern (6 color bars)...")
-	generateTestPattern(fb, display)
+	// Generate test pattern
+	println("Generating test pattern...")
+	generateTestPattern(display)
 	println("✓ Test pattern generated")
 	println()
 
@@ -60,13 +59,7 @@ func main() {
 
 	println("========================================")
 	println("Test pattern successfully displayed!")
-	println("You should see 6 vertical color bars:")
-	println("  1. Black")
-	println("  2. White")
-	println("  3. Red")
-	println("  4. Yellow")
-	println("  5. Blue")
-	println("  6. Green")
+	println("You should see vertical color bars for each color supported by your display")
 	println("========================================")
 	println()
 
@@ -83,35 +76,28 @@ func main() {
 // generateTestPattern creates a test pattern with 6 vertical color bars
 // Each bar width is calculated based on the display width
 // Uses the Framebuffer API - no allocations, works directly with display buffer
-func generateTestPattern(fb inky.Framebuffer, display inky.Display) {
-	// Define the 6 colors in order
-	colors := []inky.Color{
-		inky.Black,
-		inky.White,
-		inky.Red,
-		inky.Yellow,
-		inky.Blue,
-		inky.Green,
-	}
+func generateTestPattern(display inkyCommon.Display) {
+	colors := display.SupportedColors()
 
 	// Get display dimensions
 	width := display.Width()
 	height := display.Height()
 
 	// Calculate bar width
-	barWidth := width / 6
+	barWidth := width / len(colors)
 
 	// Fill framebuffer with vertical color bars
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
 			// Determine which color bar this pixel belongs to
 			colorIndex := x / barWidth
-			if colorIndex >= 6 {
-				colorIndex = 5 // Handle any rounding at the edge
+
+			if colorIndex >= len(colors) {
+				colorIndex = len(colors) - 1
 			}
 
 			// Set pixel color directly in framebuffer
-			fb.SetPixel(x, y, colors[colorIndex])
+			display.SetPixel(x, y, colors[colorIndex])
 		}
 	}
 }

@@ -1,20 +1,20 @@
-package inky
+package common
 
 import "time"
 
-// reset performs a hardware reset sequence on the display
+// Reset performs a hardware reset sequence on the display
 // This is a common operation used by all display types
-func reset(rstPin Pin) {
+func Reset(rstPin Pin) {
 	rstPin.Set(false)
 	time.Sleep(30 * time.Millisecond)
 	rstPin.Set(true)
 	time.Sleep(30 * time.Millisecond)
 }
 
-// busyWait waits for the busy pin to go high (ready state)
+// BusyWait waits for the busy pin to go high (ready state)
 // Returns true if ready, false if timeout
 // This is a common operation used by all display types
-func busyWait(busyPin Pin, timeoutSeconds int) bool {
+func BusyWait(busyPin Pin, timeoutSeconds int) bool {
 	// If BUSY pin is already high, display is ready
 	if busyPin.Get() {
 		return true
@@ -32,9 +32,9 @@ func busyWait(busyPin Pin, timeoutSeconds int) bool {
 	return false // Timeout
 }
 
-// sendCommand sends a command with optional data to the display via SPI
+// SendCommand sends a command with optional data to the display via SPI
 // This is a common operation used by all display types
-func sendCommand(spi SPI, csPin, dcPin Pin, command byte, data []byte) {
+func SendCommand(spi SPI, csPin, dcPin Pin, command byte, data []byte) {
 	csPin.Set(false)
 	dcPin.Set(false)
 	time.Sleep(300 * time.Microsecond)

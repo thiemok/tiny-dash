@@ -16,13 +16,33 @@
       "options": {
         "command": "tinygo flash -target=pico2-w ./cmd/example/main.go",
         "cwd": "inky"
-      },
-      "dependsOn": ["build-example"]
+      }
+    },
+    "eeprom-reader": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tinygo flash -target=pico2-w ./cmd/eeprom-reader/main.go && tinygo monitor",
+        "cwd": "inky"
+      }
     },
     "monitor": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tinygo monitor",
+        "cwd": "inky"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go test ./pkg/... -v",
+        "cwd": "inky"
+      }
+    },
+    "test:coverage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go test ./pkg/... -coverprofile=coverage.out && go tool cover -html=coverage.out -o coverage.html",
         "cwd": "inky"
       }
     }

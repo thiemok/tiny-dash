@@ -3,7 +3,7 @@ package adapters
 import (
 	"machine"
 
-	"github.com/thiemok/tiny-dash/inky/pkg/inky"
+	inky "github.com/thiemok/tiny-dash/inky/pkg/inky/common"
 )
 
 // Pin assignments for Pico 2 W with Hard Stuff Pico-to-Pi adapter
@@ -17,6 +17,8 @@ const (
 	pinSCK  = machine.SPI1_SCK_PIN // SPI CLK - RPi GPIO 11
 	pinSDO  = machine.SPI1_SDO_PIN // SPI MOSI - RPi GPIO 10
 	pinSDI  = machine.SPI1_SDI_PIN // unused, but required for SPI configuration
+	pinSDA  = machine.I2C1_SDA_PIN // I2C SDA - RPi GPIO 2 -> GP3
+	pinSCL  = machine.I2C1_SCL_PIN // I2C SCL - RPi GPIO 3 -> GP2
 
 	spiFrequency = 1_000_000 // 1 MHz (matching Python implementation)
 	spiMode      = 0         // Mode 0 (CPOL=0, CPHA=0)
@@ -86,8 +88,8 @@ func NewPico2PicoToPiHardware() (*inky.InkyConfig, error) {
 	i2c := machine.I2C1
 	err = i2c.Configure(machine.I2CConfig{
 		Frequency: i2cFrequency,
-		SDA:       machine.I2C1_SDA_PIN,
-		SCL:       machine.I2C1_SCL_PIN,
+		SDA:       pinSDA,
+		SCL:       pinSCL,
 	})
 	if err != nil {
 		return nil, err
@@ -103,13 +105,13 @@ func NewPico2PicoToPiHardware() (*inky.InkyConfig, error) {
 	// But set initial states for safety
 	cs.Configure(inky.PinOutput)
 	cs.Set(true) // CS idle high
-	
+
 	dc.Configure(inky.PinOutput)
 	dc.Set(false) // DC default low
-	
+
 	rst.Configure(inky.PinOutput)
 	rst.Set(true) // RST idle high
-	
+
 	busy.Configure(inky.PinInput)
 
 	return &inky.InkyConfig{

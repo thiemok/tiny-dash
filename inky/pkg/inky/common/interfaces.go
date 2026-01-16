@@ -1,4 +1,4 @@
-package inky
+package common
 
 // PinMode represents pin configuration mode
 type PinMode uint8
@@ -44,12 +44,13 @@ type SPI interface {
 }
 
 // InkyConfig bundles hardware interfaces for display initialization
-// All fields are required - displays need all these interfaces to function
+// All fields except CS1 are required - displays need these interfaces to function
 type InkyConfig struct {
-	SPI  SPI  // SPI bus for display communication
-	I2C  I2C  // I2C bus for EEPROM reading
-	CS   Pin  // Chip Select pin
-	DC   Pin  // Data/Command pin
-	RST  Pin  // Reset pin
-	BUSY Pin  // Busy signal pin (input)
+	SPI  SPI // SPI bus for display communication
+	I2C  I2C // I2C bus for EEPROM reading
+	CS   Pin // Chip Select pin (primary)
+	CS1  Pin // Chip Select pin 1 (optional, only for EL133UF1 dual-CS display)
+	DC   Pin // Data/Command pin
+	RST  Pin // Reset pin
+	BUSY Pin // Busy signal pin (input)
 }

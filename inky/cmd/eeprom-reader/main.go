@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/thiemok/tiny-dash/inky/pkg/inky/adapters"
+	"github.com/thiemok/tiny-dash/inky/pkg/adapters"
 )
 
 // EEPROM constants
