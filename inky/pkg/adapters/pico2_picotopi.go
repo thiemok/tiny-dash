@@ -20,6 +20,13 @@ const (
 	pinSDA  = machine.I2C1_SDA_PIN // I2C SDA - RPi GPIO 2 -> GP3
 	pinSCL  = machine.I2C1_SCL_PIN // I2C SCL - RPi GPIO 3 -> GP2
 
+	// Button and LED pins (Pimoroni Inky Impression standard)
+	pinButtonA = machine.GP15 // Button A - RPi GPIO 5 → GP15
+	pinButtonB = machine.GP6  // Button B - RPi GPIO 6 → GP6
+	pinButtonC = machine.GP16 // Button C - RPi GPIO 16 → GP16
+	pinButtonD = machine.GP1  // Button D - RPi GPIO 24 → GP24
+	pinLED     = machine.GP13 // Status LED - RPi GPIO 13 → GP13 (verified from Pimoroni examples)
+
 	spiFrequency = 1_000_000 // 1 MHz (matching Python implementation)
 	spiMode      = 0         // Mode 0 (CPOL=0, CPHA=0)
 
@@ -114,6 +121,13 @@ func NewPico2PicoToPiHardware() (*inky.InkyConfig, error) {
 
 	busy.Configure(inky.PinInput)
 
+	// Create button and LED pin wrappers (always configured)
+	buttonA := &Pico2Pin{pin: pinButtonA}
+	buttonB := &Pico2Pin{pin: pinButtonB}
+	buttonC := &Pico2Pin{pin: pinButtonC}
+	buttonD := &Pico2Pin{pin: pinButtonD}
+	led := &Pico2Pin{pin: pinLED}
+
 	return &inky.InkyConfig{
 		SPI:  &Pico2SPI{bus: spi},
 		I2C:  &Pico2I2C{bus: i2c},
@@ -121,5 +135,9 @@ func NewPico2PicoToPiHardware() (*inky.InkyConfig, error) {
 		DC:   dc,
 		RST:  rst,
 		BUSY: busy,
+
+		// Optional features - displays can use these if they support buttons/LED
+		ButtonPins: []inky.Pin{buttonA, buttonB, buttonC, buttonD},
+		LEDPin:     led,
 	}, nil
 }

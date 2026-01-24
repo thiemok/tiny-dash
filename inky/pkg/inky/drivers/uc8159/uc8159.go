@@ -20,6 +20,10 @@ type InkyUC8159 struct {
 	borderColor       common.Color
 	width, height     int
 	common.Framebuffer
+
+	// Optional features
+	buttons *common.ButtonController
+	led     *common.LEDController
 }
 
 // New creates a new UC8159 display instance
@@ -66,6 +70,23 @@ func New(config common.InkyConfig, width, height int) (*InkyUC8159, error) {
 	config.CS.Set(true)
 	config.DC.Set(false)
 	config.RST.Set(true)
+
+	// Initialize optional features (buttons and LED) if available
+	if len(config.ButtonPins) > 0 {
+		buttons, err := common.NewButtonController(config.ButtonPins, 50*time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize button controller: %w", err)
+		}
+		display.buttons = buttons
+	}
+
+	if config.LEDPin != nil {
+		led, err := common.NewLEDController(config.LEDPin)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize LED controller: %w", err)
+		}
+		display.led = led
+	}
 
 	return display, nil
 }

@@ -2,6 +2,7 @@ package e640
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/thiemok/tiny-dash/inky/pkg/inky/common"
 	"github.com/thiemok/tiny-dash/inky/pkg/inky/drivers/phat"
@@ -18,6 +19,10 @@ const (
 type E640Display struct {
 	config common.InkyConfig
 	common.Framebuffer
+
+	// Optional features
+	buttons *common.ButtonController
+	led     *common.LEDController
 }
 
 // New creates and initializes an Inky Impression 4.0" Spectra 6 display (E640)
@@ -50,6 +55,23 @@ func New(config common.InkyConfig) (*E640Display, error) {
 	// Perform hardware initialization
 	if err := display.init(); err != nil {
 		return nil, fmt.Errorf("display initialization failed: %w", err)
+	}
+
+	// Initialize optional features (buttons and LED) if available
+	if len(config.ButtonPins) > 0 {
+		buttons, err := common.NewButtonController(config.ButtonPins, 50*time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize button controller: %w", err)
+		}
+		display.buttons = buttons
+	}
+
+	if config.LEDPin != nil {
+		led, err := common.NewLEDController(config.LEDPin)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize LED controller: %w", err)
+		}
+		display.led = led
 	}
 
 	return display, nil

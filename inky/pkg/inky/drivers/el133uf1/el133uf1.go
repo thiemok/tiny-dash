@@ -22,6 +22,10 @@ type InkyEL133UF1 struct {
 	borderColor        common.Color
 	bufferH1, bufferH2 common.Framebuffer
 	common.Framebuffer
+
+	// Optional features
+	buttons *common.ButtonController
+	led     *common.LEDController
 }
 
 // New creates a new EL133UF1 display instance
@@ -66,6 +70,23 @@ func New(config common.InkyConfig) (*InkyEL133UF1, error) {
 	config.CS1.Set(true)
 	config.DC.Set(false)
 	config.RST.Set(true)
+
+	// Initialize optional features (buttons and LED) if available
+	if len(config.ButtonPins) > 0 {
+		buttons, err := common.NewButtonController(config.ButtonPins, 50*time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize button controller: %w", err)
+		}
+		display.buttons = buttons
+	}
+
+	if config.LEDPin != nil {
+		led, err := common.NewLEDController(config.LEDPin)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize LED controller: %w", err)
+		}
+		display.led = led
+	}
 
 	return display, nil
 }

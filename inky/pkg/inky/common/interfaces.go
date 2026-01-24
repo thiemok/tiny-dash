@@ -44,7 +44,7 @@ type SPI interface {
 }
 
 // InkyConfig bundles hardware interfaces for display initialization
-// All fields except CS1 are required - displays need these interfaces to function
+// All fields except CS1, ButtonPins, and LEDPin are required
 type InkyConfig struct {
 	SPI  SPI // SPI bus for display communication
 	I2C  I2C // I2C bus for EEPROM reading
@@ -53,4 +53,8 @@ type InkyConfig struct {
 	DC   Pin // Data/Command pin
 	RST  Pin // Reset pin
 	BUSY Pin // Busy signal pin (input)
+
+	// Optional features (not all displays support these)
+	ButtonPins []Pin // Button pins (optional, for displays with buttons)
+	LEDPin     Pin   // LED pin (optional, for displays with status LED)
 }
