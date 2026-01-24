@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/thiemok/tiny-dash/inky/pkg/adapters"
+	"github.com/thiemok/tiny-dash/inky/pkg/inky"
 	inkyCommon "github.com/thiemok/tiny-dash/inky/pkg/inky/common"
-	"github.com/thiemok/tiny-dash/inky/pkg/inky/drivers/e673"
 )
 
 func main() {
@@ -32,9 +32,7 @@ func main() {
 
 	// Auto-detect and initialize display via EEPROM
 	println("Detecting display via EEPROM...")
-	var display inkyCommon.Display
-	// display, err := inky.Auto(*hardware)
-	display, err = e673.New(*hardware)
+	display, err := inky.Auto(*hardware)
 	if err != nil {
 		println("Error:", err.Error())
 		return

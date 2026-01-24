@@ -32,6 +32,11 @@ type I2C interface {
 	// r: buffer for data to read (can be nil for write-only operation)
 	// Returns error if transaction fails
 	Tx(addr uint16, w, r []byte) error
+	// ReadRegister transmits the register, restarts the connection as a read operation, and reads the response.
+	// Many I2C-compatible devices are organized in terms of registers.
+	// This method is a shortcut to easily read such registers. Also, it only works for devices with 7-bit addresses,
+	// which is the vast majority.
+	ReadRegister(addr, register uint8, data []byte) error
 }
 
 // SPI interface for display communication

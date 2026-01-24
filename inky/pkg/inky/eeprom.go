@@ -3,7 +3,6 @@ package inky
 import (
 	"encoding/binary"
 	"fmt"
-	"time"
 
 	"github.com/thiemok/tiny-dash/inky/pkg/inky/common"
 )
@@ -41,6 +40,16 @@ var displayVariantNames = map[byte]string{
 	25: "Spectra 6 4.0 400 x 600 (E640)",
 }
 
+// Color mapping (from Pimoroni's Python implementation)
+var colorNames = map[byte]string{
+	1: "black",
+	2: "red",
+	3: "yellow",
+	5: "7colour",
+	6: "spectra6",
+	7: "red/yellow",
+}
+
 // EEPROMData represents the parsed EEPROM structure from an Inky display
 type EEPROMData struct {
 	Width          uint16 // Display width in pixels
@@ -60,6 +69,20 @@ func (e *EEPROMData) GetVariantName() string {
 	return name
 }
 
+// GetColorName returns the human-readable name for the color type
+func (e *EEPROMData) GetColorName() string {
+	name := colorNames[e.Color]
+	if name == "" {
+		return fmt.Sprintf("unknown (0x%02X)", e.Color)
+	}
+	return name
+}
+
+// GetPCBVariantString returns the formatted PCB version string (e.g., "v1.2")
+func (e *EEPROMData) GetPCBVariantString() string {
+	return fmt.Sprintf("v%.1f", float32(e.PCBVariant)/10.0)
+}
+
 // ReadEEPROM reads and parses the EEPROM data from an Inky display
 // The EEPROM contains display identification and configuration information
 // Returns error if the EEPROM cannot be read or the data is invalid
@@ -67,17 +90,9 @@ func ReadEEPROM(i2c common.I2C) (*EEPROMData, error) {
 	// Allocate buffer for EEPROM data
 	data := make([]byte, eepromSize)
 
-	// Write starting address (0x00) to EEPROM
-	err := i2c.Tx(eepromAddress, []byte{0x00}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set EEPROM read address: %w", err)
-	}
-
-	// Small delay to allow EEPROM to respond
-	time.Sleep(10 * time.Millisecond)
-
-	// Read EEPROM data
-	err = i2c.Tx(eepromAddress, nil, data)
+	// Read EEPROM
+	// Write starting address (0x00, 0x00) and read data
+	err := i2c.Tx(eepromAddress, []byte{0x00, 0x00}, data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read EEPROM data: %w", err)
 	}

@@ -25,7 +25,7 @@ const (
 	pinButtonB = machine.GP6  // Button B - RPi GPIO 6 → GP6
 	pinButtonC = machine.GP16 // Button C - RPi GPIO 16 → GP16
 	pinButtonD = machine.GP1  // Button D - RPi GPIO 24 → GP24
-	pinLED     = machine.GP13 // Status LED - RPi GPIO 13 → GP13 (verified from Pimoroni examples)
+	pinLED     = machine.GP13 // Status LED - RPi GPIO 13 → GP13
 
 	spiFrequency = 1_000_000 // 1 MHz (matching Python implementation)
 	spiMode      = 0         // Mode 0 (CPOL=0, CPHA=0)
@@ -63,6 +63,10 @@ type Pico2I2C struct {
 
 func (i *Pico2I2C) Tx(addr uint16, w, r []byte) error {
 	return i.bus.Tx(addr, w, r)
+}
+
+func (i *Pico2I2C) ReadRegister(addr, register uint8, data []byte) error {
+	return i.bus.ReadRegister(addr, register, data)
 }
 
 // Pico2SPI wraps machine.SPI to implement the inky.SPI interface
