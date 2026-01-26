@@ -9,8 +9,10 @@
     "lint": "nx run-many --target=lint --all"
   },
   "devDependencies": {
+    "@naxodev/gonx": "^3.0.0",
     "@nx-go/nx-go": "^2.6.0",
     "@nx/workspace": "^22.2.7",
     "nx": "^22.2.7"
-  }
+  },
+  "packageManager": "pnpm@10.13.1+sha512.37ebf1a5c7a30d5fabe0c5df44ee8da4c965ca0c5af3dbab28c3a1681b70a256218d05c81c9c0dcf767ef6b8551eb5b960042b9ed4300c59242336377e01cfad"
 }

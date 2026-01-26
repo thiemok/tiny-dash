@@ -1,0 +1,38 @@
+{
+  "name": "picoDevice",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "picoDevice",
+  "targets": {
+    "configure": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash tools/configure.sh",
+        "cwd": "picoDevice"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash tools/build.sh",
+        "cwd": "picoDevice"
+      },
+      "dependsOn": ["configure"]
+    },
+    "upload": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tinygo flash -target=pico2-w ./cmd/picoDevice/main.go",
+        "cwd": "picoDevice"
+      },
+      "dependsOn": ["configure"]
+    },
+    "monitor": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tinygo monitor",
+        "cwd": "picoDevice"
+      }
+    }
+  }
+}
