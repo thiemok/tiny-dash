@@ -1,0 +1,3 @@
+dist
+.env
+/internal/config/generated.go

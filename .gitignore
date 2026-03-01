@@ -3,6 +3,13 @@
 .nx/workspace-data
 node_modules
 
+dist
+
+#Claude
+.claude/settings.local.json
+
+opencode.json
+
 #Cline
 tasks
 
