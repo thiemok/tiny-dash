@@ -9,7 +9,7 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "Building picoDevice firmware for Raspberry Pi Pico 2 W..."
 
-tinygo build -target=$TARGET -opt=2 -o $OUTPUT_FILE ./cmd/picoDevice
+tinygo build -target=$TARGET -scheduler=tasks -stack-size=8kb -opt=2 -o $OUTPUT_FILE ./cmd/picoDevice
 
 echo "✓ picoDevice firmware built: $OUTPUT_FILE"
 echo ""

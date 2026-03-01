@@ -22,7 +22,7 @@
     "upload": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "tinygo flash -target=pico2-w ./cmd/picoDevice/main.go",
+        "command": "tinygo flash -target=pico2-w -scheduler=tasks ./cmd/picoDevice/main.go",
         "cwd": "picoDevice"
       },
       "dependsOn": ["configure"]

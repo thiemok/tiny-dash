@@ -17,14 +17,22 @@ import (
 
 func main() {
 	http.HandleFunc("/api/dashboard/image", handleImageRequest)
-	
+	http.HandleFunc("/api/hello", handleHello)
+
 	port := ":8080"
 	log.Printf("Starting API server on %s", port)
 	log.Printf("Endpoint: GET /api/dashboard/image?width=X&height=Y&colorDepth=Z&colors=R,G,B,...")
+	log.Printf("Endpoint: GET /api/hello")
 	
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func handleHello(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Received request: %s", r.URL.String())
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte("Hello, World!"))
 }
 
 func handleImageRequest(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +98,17 @@ func generateImage(width, height, colorDepth int, colors []byte) []byte {
 	// Create color palette for the image
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	
-	// Draw color bars (vertical bars, one per color)
+	// Reserve space for timestamp text
+	textAreaHeight := 40
+
+	// Fill text area with white background
+	for y := 0; y < textAreaHeight && y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{255, 255, 255, 255})
+		}
+	}
+
+	// Draw color bars (vertical bars, one per color) below text area
 	barWidth := width / len(colors)
 	for i, c := range colors {
 		startX := i * barWidth
@@ -98,11 +116,10 @@ func generateImage(width, height, colorDepth int, colors []byte) []byte {
 		if i == len(colors)-1 {
 			endX = width // Last bar fills remaining width
 		}
-		
+
 		// Fill bar with color
-		for y := 0; y < height; y++ {
+		for y := textAreaHeight; y < height; y++ {
 			for x := startX; x < endX; x++ {
-				// Set color in image (for text rendering)
 				img.Set(x, y, getDisplayColor(c))
 			}
 		}
