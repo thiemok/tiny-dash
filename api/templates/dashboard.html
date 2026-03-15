@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tiny-dash</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Courier New', monospace;
+    background: #fff;
+    color: #000;
+    width: {{.Width}}px;
+    height: {{.Height}}px;
+    overflow: hidden;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+  }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 24px;
+  }
+  .time {
+    font-size: 64px;
+    font-weight: bold;
+    letter-spacing: 2px;
+  }
+  .date {
+    font-size: 28px;
+    text-align: right;
+  }
+  .status {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 12px;
+  }
+  .status-row {
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status-row .dot {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #000;
+  }
+  .status-row .dot.online { background: #00ff00; }
+  .color-bar {
+    display: flex;
+    height: 32px;
+    margin-top: auto;
+    gap: 4px;
+  }
+  .color-bar .swatch {
+    flex: 1;
+    border: 1px solid #000;
+  }
+</style>
+<script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <div class="header">
+    <div class="time" hx-get="/dashboard/partials/clock" hx-trigger="every 10s" hx-swap="innerHTML">
+      {{template "clock" .}}
+    </div>
+    <div class="date">{{.Date}}</div>
+  </div>
+  <div class="status" hx-get="/dashboard/partials/status" hx-trigger="every 10s" hx-swap="innerHTML">
+    {{template "status" .}}
+  </div>
+  <div class="color-bar">
+    {{range .Swatches}}
+    <div class="swatch" style="background:{{.}}"></div>
+    {{end}}
+  </div>
+</body>
+</html>

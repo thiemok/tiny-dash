@@ -1,0 +1,22 @@
+{
+  "name": "api",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "api",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go build -o dist/api ./cmd/api",
+        "cwd": "api"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "CHROME_PATH=tools/flatpak-chrome-wrapper.sh go run ./cmd/api",
+        "cwd": "api"
+      }
+    }
+  }
+}
