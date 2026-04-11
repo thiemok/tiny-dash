@@ -1,1 +1,8 @@
-{{define "clock"}}{{.Time}}{{end}}
+{{define "clock"}}
+<span class="clock-hour">{{.Hour}}</span>
+<div class="clock-dots">
+  {{range .Dots}}
+  <span class="dot{{if .}} filled{{end}}"></span>
+  {{end}}
+</div>
+{{end}}

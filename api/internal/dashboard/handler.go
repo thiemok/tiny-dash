@@ -37,13 +37,22 @@ func NewDashboardHandler(fsys fs.FS, haClient *homeassistant.Client, cfg *config
 
 // templateData holds values passed to the dashboard template.
 type templateData struct {
-	Width      int
-	Height     int
-	Time       string
-	Hour       string
-	MinuteDots int // 0-11, number of filled 5-minute dots
-	Date       string
-	Swatches   []template.CSS
+	Width    int
+	Height   int
+	Time     string
+	Hour     string
+	Dots     []bool // 12 entries, true = filled (elapsed 5-min block)
+	Date     string
+	Swatches []template.CSS
+}
+
+func minuteDots(minute int) []bool {
+	filled := minute / 5
+	dots := make([]bool, 12)
+	for i := range filled {
+		dots[i] = true
+	}
+	return dots
 }
 
 func (h *DashboardHandler) newTemplateData(width, height int, palette render.Palette) templateData {
@@ -55,13 +64,13 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 	}
 
 	return templateData{
-		Width:      width,
-		Height:     height,
-		Time:       now.Format("15:04"),
-		Hour:       now.Format("15"),
-		MinuteDots: now.Minute() / 5,
-		Date:       now.Format("Mon, 02 Jan '06"),
-		Swatches:   swatches,
+		Width:    width,
+		Height:   height,
+		Time:     now.Format("15:04"),
+		Hour:     now.Format("15"),
+		Dots:     minuteDots(now.Minute()),
+		Date:     now.Format("Mon, 02 Jan '06"),
+		Swatches: swatches,
 	}
 }
 
@@ -69,7 +78,6 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 func (h *DashboardHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard", h.handleDashboard)
 	mux.HandleFunc("GET /dashboard/partials/clock", h.handleClock)
-	mux.HandleFunc("GET /dashboard/partials/status", h.handleStatus)
 }
 
 func (h *DashboardHandler) parseDashboardParams(r *http.Request) (int, int, render.Palette) {
@@ -117,10 +125,3 @@ func (h *DashboardHandler) handleClock(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *DashboardHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
-	data := h.newTemplateData(0, 0, nil)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.tmpl.ExecuteTemplate(w, "status", data); err != nil {
-		log.Printf("template error: %v", err)
-	}
-}
