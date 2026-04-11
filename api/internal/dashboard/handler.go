@@ -10,50 +10,44 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thiemok/tiny-dash/api/internal/config"
+	"github.com/thiemok/tiny-dash/api/internal/homeassistant"
 	"github.com/thiemok/tiny-dash/api/internal/render"
 )
 
 // DashboardHandler serves the browser-facing HTML dashboard and HTMX partials.
 type DashboardHandler struct {
-	tmpl      *template.Template
-	startTime time.Time
+	tmpl     *template.Template
+	haClient *homeassistant.Client
+	config   *config.Config
 }
 
 // NewDashboardHandler creates a dashboard handler. fsys must contain templates/ at root.
-func NewDashboardHandler(fsys fs.FS) (*DashboardHandler, error) {
+func NewDashboardHandler(fsys fs.FS, haClient *homeassistant.Client, cfg *config.Config) (*DashboardHandler, error) {
 	tmpl, err := loadTemplates(fsys)
 	if err != nil {
 		return nil, fmt.Errorf("loading templates: %w", err)
 	}
 	return &DashboardHandler{
-		tmpl:      tmpl,
-		startTime: time.Now(),
+		tmpl:     tmpl,
+		haClient: haClient,
+		config:   cfg,
 	}, nil
 }
 
 // templateData holds values passed to the dashboard template.
 type templateData struct {
-	Width       int
-	Height      int
-	Time        string
-	Date        string
-	RefreshTime string
-	Uptime      string
-	Swatches    []template.CSS
+	Width      int
+	Height     int
+	Time       string
+	Hour       string
+	MinuteDots int // 0-11, number of filled 5-minute dots
+	Date       string
+	Swatches   []template.CSS
 }
 
 func (h *DashboardHandler) newTemplateData(width, height int, palette render.Palette) templateData {
 	now := time.Now()
-	uptime := now.Sub(h.startTime).Truncate(time.Minute)
-	hours := int(uptime.Hours())
-	minutes := int(uptime.Minutes()) % 60
-
-	var uptimeStr string
-	if hours > 0 {
-		uptimeStr = fmt.Sprintf("%dh %dm", hours, minutes)
-	} else {
-		uptimeStr = fmt.Sprintf("%dm", minutes)
-	}
 
 	swatches := make([]template.CSS, len(palette))
 	for i, e := range palette {
@@ -61,13 +55,13 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 	}
 
 	return templateData{
-		Width:       width,
-		Height:      height,
-		Time:        now.Format("15:04"),
-		Date:        now.Format("Mon, 02 Jan '06"),
-		RefreshTime: now.Format("15:04:05"),
-		Uptime:      uptimeStr,
-		Swatches:    swatches,
+		Width:      width,
+		Height:     height,
+		Time:       now.Format("15:04"),
+		Hour:       now.Format("15"),
+		MinuteDots: now.Minute() / 5,
+		Date:       now.Format("Mon, 02 Jan '06"),
+		Swatches:   swatches,
 	}
 }
 

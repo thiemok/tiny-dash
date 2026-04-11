@@ -8,11 +8,20 @@ import (
 	"syscall"
 
 	api "github.com/thiemok/tiny-dash/api"
+	"github.com/thiemok/tiny-dash/api/internal/config"
 	"github.com/thiemok/tiny-dash/api/internal/dashboard"
+	"github.com/thiemok/tiny-dash/api/internal/homeassistant"
 	"github.com/thiemok/tiny-dash/api/internal/render"
 )
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	haClient := homeassistant.NewClient(cfg.HA.BaseURL, cfg.HA.Token)
+
 	chromePath := os.Getenv("CHROME_PATH")
 	renderer, err := render.NewRenderer(chromePath)
 	if err != nil {
@@ -20,7 +29,7 @@ func main() {
 	}
 	defer renderer.Close()
 
-	dashHandler, err := dashboard.NewDashboardHandler(api.TemplateFS)
+	dashHandler, err := dashboard.NewDashboardHandler(api.TemplateFS, haClient, cfg)
 	if err != nil {
 		log.Fatalf("Failed to create dashboard handler: %v", err)
 	}

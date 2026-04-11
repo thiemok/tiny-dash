@@ -2,7 +2,10 @@ module github.com/thiemok/tiny-dash/api
 
 go 1.25
 
-require github.com/chromedp/chromedp v0.14.2
+require (
+	github.com/chromedp/chromedp v0.14.2
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327 // indirect
