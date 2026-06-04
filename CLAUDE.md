@@ -22,3 +22,26 @@
 
 
 <!-- nx configuration end-->
+
+# Running the API dev server (for agents)
+
+The `api:serve` target builds and `exec`s a single binary (`dist/api`) with graceful shutdown —
+a SIGTERM tears down the HTTP server **and** the headless Chrome it spawns. Chrome runs via
+flatpak, so broad kills are dangerous (`pkill chrome` can kill the user's real browser).
+
+To run and stop the server during validation:
+
+1. **Start** in the background and capture the `task_id`:
+   `Bash(run_in_background: true)` → `pnpm nx run api:serve`
+2. **Validate**: `curl -fs localhost:8080/api/hello` returns `Hello, World!`. To exercise Chrome
+   rendering use `/api/dashboard/preview?width=800&height=480&colors=0,1,2,3&mock=1` (PNG) or the
+   packed image `/api/dashboard/image?width=800&height=480&colors=0,1,2,3&colorDepth=4&mock=1`
+   (`colorDepth` is required). The task output file shows `Starting API server on :8080` once ready.
+3. **Stop**: `TaskStop({task_id})` — the single exec'd binary shuts down gracefully and kills Chrome.
+4. **Verify stopped** (read-only): `ss -ltnp 'sport = :8080'` returns nothing.
+
+**Hard rule:** NEVER use `pkill`, `killall`, `fuser -k`, or kill by port/name. If a `TaskStop` ever
+fails, kill only the **specific PID/PGID captured from that task** — never by pattern.
+
+For an interactive auto-restart edit loop (rebuilds on save), use `pnpm nx run api:dev` (wgo) and
+stop it with Ctrl-C.

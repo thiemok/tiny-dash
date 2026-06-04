@@ -14,7 +14,14 @@
     "serve": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "CHROME_PATH=tools/flatpak-chrome-wrapper.sh go run ./cmd/api",
+        "command": "export CHROME_PATH=tools/flatpak-chrome-wrapper.sh && go build -o dist/api ./cmd/api && exec ./dist/api",
+        "cwd": "api"
+      }
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "CHROME_PATH=tools/flatpak-chrome-wrapper.sh go tool wgo run ./cmd/api",
         "cwd": "api"
       }
     }

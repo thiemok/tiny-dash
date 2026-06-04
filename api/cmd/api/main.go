@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	api "github.com/thiemok/tiny-dash/api"
 	"github.com/thiemok/tiny-dash/api/internal/config"
@@ -57,8 +60,10 @@ func main() {
 	log.Printf("  GET /api/dashboard/preview           — dithered PNG preview")
 	log.Printf("  GET /api/hello                       — health check")
 
+	srv := &http.Server{Addr: port, Handler: mux}
+
 	go func() {
-		if err := http.ListenAndServe(port, mux); err != nil {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
 	}()
@@ -67,4 +72,10 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 	log.Println("Shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("Graceful shutdown failed: %v", err)
+	}
 }
