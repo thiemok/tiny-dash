@@ -32,5 +32,10 @@ func (t Time) IsAllDay() bool {
 	return t.Date != "" && t.DateTime == ""
 }
 
-// ServiceResponse represents the response from a HA service call.
+// serviceCallResult is the top-level response envelope from a HA service call.
+type serviceCallResult struct {
+	ServiceResponse ServiceResponse `json:"service_response"`
+}
+
+// ServiceResponse represents the inner service_response from a HA service call.
 type ServiceResponse map[string]json.RawMessage

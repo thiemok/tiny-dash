@@ -1,0 +1,23 @@
+{{define "weather"}}
+<div class="weather-now">
+    <div class="weather-current">
+        <span class="wi {{.Weather.Icon}} wi-lg"></span>
+        <span class="weather-temp">{{printf "%.0f" .Weather.Temperature}}&deg;</span>
+    </div>
+    <div class="weather-meta">
+        <span class="weather-highlow"><span class="arrow-up"></span>{{printf "%.0f" .Weather.TempHigh}}&deg; <span class="arrow-down"></span>{{printf "%.0f" .Weather.TempLow}}&deg;</span>
+        <span class="weather-sun"><span class="sun-rise"></span>{{.Weather.SunriseStr}} <span class="sun-set"></span>{{.Weather.SunsetStr}}</span>
+    </div>
+</div>
+{{if .Weather.HourlyForecast}}
+<div class="weather-forecast">
+    {{range .Weather.HourlyForecast}}
+    <div class="forecast-entry">
+        <span class="forecast-time">{{.TimeStr}}</span>
+        <span class="wi {{.Icon}} wi-sm"></span>
+        <span class="forecast-temp">{{printf "%.0f" .Temperature}}&deg;</span>
+    </div>
+    {{end}}
+</div>
+{{end}}
+{{end}}

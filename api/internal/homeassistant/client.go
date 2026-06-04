@@ -46,7 +46,7 @@ func (c *Client) GetState(entityID string) (*State, error) {
 
 // CallService invokes a Home Assistant service and returns the response.
 func (c *Client) CallService(domain, service string, data any) (ServiceResponse, error) {
-	path := fmt.Sprintf("/api/services/%s/%s", url.PathEscape(domain), url.PathEscape(service))
+	path := fmt.Sprintf("/api/services/%s/%s?return_response", url.PathEscape(domain), url.PathEscape(service))
 
 	var reqBody io.Reader
 	if data != nil {
@@ -62,11 +62,11 @@ func (c *Client) CallService(domain, service string, data any) (ServiceResponse,
 		return nil, fmt.Errorf("calling service %s/%s: %w", domain, service, err)
 	}
 
-	var resp ServiceResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
+	var result serviceCallResult
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("decoding service response for %s/%s: %w", domain, service, err)
 	}
-	return resp, nil
+	return result.ServiceResponse, nil
 }
 
 // GetCalendarEvents fetches events from a calendar entity for the given time range.

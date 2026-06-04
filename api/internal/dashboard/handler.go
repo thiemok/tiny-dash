@@ -35,6 +35,44 @@ func NewDashboardHandler(fsys fs.FS, haClient *homeassistant.Client, cfg *config
 	}, nil
 }
 
+// hourlyForecastView holds a single hourly forecast entry for the template.
+type hourlyForecastView struct {
+	TimeStr     string
+	Temperature float64
+	Icon        string
+}
+
+// weatherView holds weather data for template rendering.
+type weatherView struct {
+	Temperature    float64
+	Condition      string
+	Icon           string
+	TempHigh       float64
+	TempLow        float64
+	SunriseStr     string
+	SunsetStr      string
+	HourlyForecast []hourlyForecastView
+}
+
+// conditionClass maps HA weather condition strings to CSS class names for icons.
+var conditionClass = map[string]string{
+	"sunny":           "wi-sunny",
+	"clear-night":     "wi-night",
+	"partlycloudy":    "wi-partlycloudy",
+	"cloudy":          "wi-cloudy",
+	"rainy":           "wi-rainy",
+	"pouring":         "wi-pouring",
+	"snowy":           "wi-snowy",
+	"snowy-rainy":     "wi-snowy",
+	"fog":             "wi-fog",
+	"hail":            "wi-rainy",
+	"lightning":       "wi-lightning",
+	"lightning-rainy": "wi-lightning",
+	"windy":           "wi-windy",
+	"windy-variant":   "wi-windy",
+	"exceptional":     "wi-cloudy",
+}
+
 // templateData holds values passed to the dashboard template.
 type templateData struct {
 	Width    int
@@ -44,6 +82,7 @@ type templateData struct {
 	Dots     []bool // 12 entries, true = filled (elapsed 5-min block)
 	Date     string
 	Swatches []template.CSS
+	Weather  *weatherView
 }
 
 func minuteDots(minute int) []bool {
@@ -63,7 +102,7 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 		swatches[i] = template.CSS(fmt.Sprintf("rgb(%d,%d,%d)", e.R, e.G, e.B))
 	}
 
-	return templateData{
+	data := templateData{
 		Width:    width,
 		Height:   height,
 		Time:     now.Format("15:04"),
@@ -72,6 +111,57 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 		Date:     now.Format("Mon, 02 Jan '06"),
 		Swatches: swatches,
 	}
+
+	data.Weather = h.fetchWeather()
+
+	return data
+}
+
+func (h *DashboardHandler) fetchWeather() *weatherView {
+	entityID := h.config.Weather.EntityID
+	if entityID == "" {
+		return nil
+	}
+
+	wd, err := h.haClient.GetWeather(entityID)
+	if err != nil {
+		log.Printf("weather fetch error: %v", err)
+		return nil
+	}
+
+	icon := conditionClass[wd.Condition]
+	if icon == "" {
+		icon = "wi-cloudy"
+	}
+
+	view := &weatherView{
+		Temperature: wd.Temperature,
+		Condition:   wd.Condition,
+		Icon:        icon,
+		TempHigh:    wd.TempHigh,
+		TempLow:     wd.TempLow,
+	}
+
+	if !wd.Sunrise.IsZero() {
+		view.SunriseStr = wd.Sunrise.Local().Format("15:04")
+	}
+	if !wd.Sunset.IsZero() {
+		view.SunsetStr = wd.Sunset.Local().Format("15:04")
+	}
+
+	for _, hf := range wd.HourlyForecast {
+		hIcon := conditionClass[hf.Condition]
+		if hIcon == "" {
+			hIcon = "wi-cloudy"
+		}
+		view.HourlyForecast = append(view.HourlyForecast, hourlyForecastView{
+			TimeStr:     hf.Time.Local().Format("15"),
+			Temperature: hf.Temperature,
+			Icon:        hIcon,
+		})
+	}
+
+	return view
 }
 
 // RegisterRoutes registers the dashboard HTML routes on the given mux.
