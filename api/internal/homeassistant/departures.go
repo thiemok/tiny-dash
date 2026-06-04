@@ -55,6 +55,77 @@ type departuresAttributes struct {
 	Times     []transitTime `json:"times"`
 }
 
+// GetNextDeparturePerSensor returns one row per sensor: the soonest
+// upcoming departure for that sensor. Sensors with no upcoming entry are
+// skipped. Results are sorted by departure time.
+func (c *Client) GetNextDeparturePerSensor(entityIDs []string) ([]Departure, error) {
+	now := time.Now()
+	var picks []Departure
+
+	for _, id := range entityIDs {
+		state, err := c.GetState(id)
+		if err != nil {
+			log.Printf("departures fetch error for %s: %v", id, err)
+			continue
+		}
+
+		var attrs departuresAttributes
+		if err := json.Unmarshal(state.Attributes, &attrs); err != nil {
+			log.Printf("departures decode error for %s: %v", id, err)
+			continue
+		}
+
+		var next *Departure
+		for _, t := range attrs.Times {
+			d := Departure{
+				Line:      attrs.LineName,
+				Direction: attrs.Direction,
+				Transport: attrs.Transport,
+				HeadSign:  t.HeadSign,
+				Cancelled: t.Cancelled,
+				Alerts:    t.Alerts,
+			}
+			if pt, err := time.Parse(time.RFC3339, t.Planned); err == nil {
+				d.Planned = pt.Local()
+			}
+			if et, err := time.Parse(time.RFC3339, t.Estimated); err == nil {
+				d.Estimated = et.Local()
+			}
+
+			ref := d.Estimated
+			if ref.IsZero() {
+				ref = d.Planned
+			}
+			if ref.IsZero() || ref.Before(now) {
+				continue
+			}
+			candidate := d
+			next = &candidate
+			break // times[] is chronological; first future entry is the next one
+		}
+		if next != nil {
+			picks = append(picks, *next)
+		}
+	}
+
+	sort.SliceStable(picks, func(i, j int) bool {
+		a := picks[i].Estimated
+		if a.IsZero() {
+			a = picks[i].Planned
+		}
+		b := picks[j].Estimated
+		if b.IsZero() {
+			b = picks[j].Planned
+		}
+		return a.Before(b)
+	})
+
+	if len(picks) == 0 {
+		return nil, fmt.Errorf("no upcoming departures across %d sensors", len(entityIDs))
+	}
+	return picks, nil
+}
+
 // GetUpcomingDepartures aggregates departures from multiple sensors, filters
 // out past entries, sorts by estimated/planned time, and returns the next
 // `limit` results. Cancelled departures are kept (caller decides how to show).

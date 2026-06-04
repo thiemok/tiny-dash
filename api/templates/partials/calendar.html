@@ -3,27 +3,29 @@
 {{if and (not .Calendar.AllDay) (not .Calendar.Timed)}}
 <div class="cal-empty">No events today</div>
 {{else}}
-{{if .Calendar.AllDay}}
-<ul class="cal-list cal-allday">
-    {{range .Calendar.AllDay}}
-    <li class="cal-event">
-        <span class="cal-dot" style="background:{{.Color}}"></span>
-        <span class="cal-time">{{.TimeStr}}</span>
-        <span class="cal-summary">{{.Summary}}</span>
-    </li>
+<div class="cal-list-wrap">
+    {{if .Calendar.AllDay}}
+    <ul class="cal-list cal-allday">
+        {{range .Calendar.AllDay}}
+        <li class="cal-event">
+            <span class="cal-dot" style="background:{{.Color}}"></span>
+            <span class="cal-time">{{.TimeStr}}</span>
+            <span class="cal-summary">{{.Summary}}</span>
+        </li>
+        {{end}}
+    </ul>
     {{end}}
-</ul>
-{{end}}
-{{if .Calendar.Timed}}
-<ul class="cal-list">
-    {{range .Calendar.Timed}}
-    <li class="cal-event{{if .Ongoing}} cal-ongoing{{end}}">
-        <span class="cal-dot" style="background:{{.Color}}"></span>
-        <span class="cal-time">{{.TimeStr}}</span>
-        <span class="cal-summary">{{.Summary}}{{if .Location}} <span class="cal-location">· {{.Location}}</span>{{end}}</span>
-    </li>
+    {{if .Calendar.Timed}}
+    <ul class="cal-list">
+        {{range .Calendar.Timed}}
+        <li class="cal-event{{if .Ongoing}} cal-ongoing{{end}}">
+            <span class="cal-dot" style="background:{{.Color}}"></span>
+            <span class="cal-time">{{.TimeStr}}</span>
+            <span class="cal-summary">{{.Summary}}{{if .Location}} <span class="cal-location">· {{.Location}}</span>{{end}}</span>
+        </li>
+        {{end}}
+    </ul>
     {{end}}
-</ul>
-{{end}}
+</div>
 {{end}}
 {{end}}

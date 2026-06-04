@@ -1,16 +1,18 @@
 {{define "departures"}}
 <div class="dep-header">Departures</div>
 {{if .Departures.Departures}}
-<ul class="dep-list">
-    {{range .Departures.Departures}}
-    <li class="dep-row{{if .Cancelled}} dep-cancelled{{end}}{{if gt .Delay 0}} dep-delayed{{end}}">
-        <span class="dep-line">{{.Line}}</span>
-        <span class="dep-dir">{{.Direction}}</span>
-        <span class="dep-time">{{.TimeStr}}{{if gt .Delay 0}} <span class="dep-delay">+{{.Delay}}</span>{{end}}</span>
-        <span class="dep-eta">{{.MinutesStr}}</span>
-    </li>
-    {{end}}
-</ul>
+<div class="dep-list-wrap">
+    <ul class="dep-list">
+        {{range .Departures.Departures}}
+        <li class="dep-row{{if .Cancelled}} dep-cancelled{{end}}{{if gt .Delay 0}} dep-delayed{{end}}">
+            <span class="dep-line">{{.Line}}</span>
+            <span class="dep-dir">{{.Direction}}</span>
+            <span class="dep-time">{{.TimeStr}}{{if gt .Delay 0}} <span class="dep-delay">+{{.Delay}}</span>{{end}}</span>
+            <span class="dep-eta">{{.MinutesStr}}</span>
+        </li>
+        {{end}}
+    </ul>
+</div>
 {{else}}
 <div class="dep-empty">No upcoming departures</div>
 {{end}}

@@ -115,10 +115,11 @@ type templateData struct {
 	Hour     string
 	Dots     []bool // 12 entries, true = filled (elapsed 5-min block)
 	Date     string
-	Swatches []template.CSS
-	Weather    *weatherView
-	Calendar   *calendarView
-	Departures *departuresView
+	Swatches     []template.CSS
+	ShowSwatches bool
+	Weather      *weatherView
+	Calendar     *calendarView
+	Departures   *departuresView
 }
 
 func minuteDots(minute int) []bool {
@@ -130,7 +131,7 @@ func minuteDots(minute int) []bool {
 	return dots
 }
 
-func (h *DashboardHandler) newTemplateData(width, height int, palette render.Palette) templateData {
+func (h *DashboardHandler) newTemplateData(width, height int, palette render.Palette, mock bool) templateData {
 	now := time.Now()
 
 	swatches := make([]template.CSS, len(palette))
@@ -148,9 +149,15 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 		Swatches: swatches,
 	}
 
-	data.Weather = h.fetchWeather()
-	data.Calendar = h.fetchCalendar(now)
-	data.Departures = h.fetchDepartures(now)
+	if mock {
+		data.Weather = mockWeather(now)
+		data.Calendar = mockCalendar(now)
+		data.Departures = mockDepartures(now)
+	} else {
+		data.Weather = h.fetchWeather()
+		data.Calendar = h.fetchCalendar(now)
+		data.Departures = h.fetchDepartures(now)
+	}
 
 	return data
 }
@@ -177,7 +184,7 @@ func (h *DashboardHandler) fetchDepartures(now time.Time) *departuresView {
 		return nil
 	}
 
-	departures, err := h.haClient.GetUpcomingDepartures(ids, 6)
+	departures, err := h.haClient.GetUpcomingDepartures(ids, 0)
 	if err != nil {
 		log.Printf("departures fetch error: %v", err)
 		return nil
@@ -354,7 +361,9 @@ func (h *DashboardHandler) parseDashboardParams(r *http.Request) (int, int, rend
 
 func (h *DashboardHandler) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	width, height, palette := h.parseDashboardParams(r)
-	data := h.newTemplateData(width, height, palette)
+	mock := r.URL.Query().Get("mock") == "1"
+	data := h.newTemplateData(width, height, palette, mock)
+	data.ShowSwatches = r.URL.Query().Get("swatches") == "1"
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {
@@ -363,7 +372,7 @@ func (h *DashboardHandler) handleDashboard(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *DashboardHandler) handleClock(w http.ResponseWriter, r *http.Request) {
-	data := h.newTemplateData(0, 0, nil)
+	data := h.newTemplateData(0, 0, nil, false)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "clock", data); err != nil {
 		log.Printf("template error: %v", err)
