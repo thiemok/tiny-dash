@@ -11,5 +11,6 @@ func loadTemplates(fsys fs.FS) (*template.Template, error) {
 		"templates/partials/clock.html",
 		"templates/partials/status.html",
 		"templates/partials/weather.html",
+		"templates/partials/calendar.html",
 	)
 }

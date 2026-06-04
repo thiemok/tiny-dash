@@ -54,6 +54,23 @@ type weatherView struct {
 	HourlyForecast []hourlyForecastView
 }
 
+// eventView holds a single calendar event for the template.
+type eventView struct {
+	TimeStr  string
+	Summary  string
+	Location string
+	AllDay   bool
+	Ongoing  bool
+	Source   string         // short calendar label
+	Color    template.CSS   // accent color for the calendar source
+}
+
+// calendarView holds events for today, grouped for display.
+type calendarView struct {
+	AllDay []eventView
+	Timed  []eventView
+}
+
 // conditionClass maps HA weather condition strings to CSS class names for icons.
 var conditionClass = map[string]string{
 	"sunny":           "wi-sunny",
@@ -83,6 +100,7 @@ type templateData struct {
 	Date     string
 	Swatches []template.CSS
 	Weather  *weatherView
+	Calendar *calendarView
 }
 
 func minuteDots(minute int) []bool {
@@ -113,8 +131,76 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 	}
 
 	data.Weather = h.fetchWeather()
+	data.Calendar = h.fetchCalendar(now)
 
 	return data
+}
+
+// calendarPalette assigns an accent color per source calendar (cycled).
+// Keeps the count low to stay within the limited color budget.
+var calendarPalette = []template.CSS{
+	"#0044cc", // blue
+	"#c00000", // red
+	"#008055", // green
+	"#e08000", // orange
+}
+
+// shortCalendarLabel derives a short, human-readable label from an HA
+// calendar entity_id (e.g. "calendar.feiertage_in_deutschland" -> "Feiertage").
+func shortCalendarLabel(entityID string) string {
+	name := entityID
+	if idx := strings.Index(name, "."); idx >= 0 {
+		name = name[idx+1:]
+	}
+	if idx := strings.Index(name, "_"); idx >= 0 {
+		name = name[:idx]
+	}
+	if name == "" {
+		return entityID
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+func (h *DashboardHandler) fetchCalendar(now time.Time) *calendarView {
+	ids := h.config.Calendar.EntityIDs
+	if len(ids) == 0 {
+		return nil
+	}
+
+	events, err := h.haClient.GetCalendarEventsForToday(ids)
+	if err != nil {
+		log.Printf("calendar fetch error: %v", err)
+		return nil
+	}
+
+	colorByID := make(map[string]template.CSS, len(ids))
+	for i, id := range ids {
+		colorByID[id] = calendarPalette[i%len(calendarPalette)]
+	}
+
+	view := &calendarView{}
+	for _, ev := range events {
+		entry := eventView{
+			Summary:  ev.Summary,
+			Location: ev.Location,
+			AllDay:   ev.AllDay,
+			Source:   shortCalendarLabel(ev.EntityID),
+			Color:    colorByID[ev.EntityID],
+		}
+		if ev.AllDay {
+			entry.TimeStr = "All day"
+			view.AllDay = append(view.AllDay, entry)
+			continue
+		}
+		entry.TimeStr = ev.Start.Format("15:04")
+		entry.Ongoing = !ev.Start.After(now) && ev.End.After(now)
+		view.Timed = append(view.Timed, entry)
+	}
+
+	if len(view.AllDay) == 0 && len(view.Timed) == 0 {
+		return view
+	}
+	return view
 }
 
 func (h *DashboardHandler) fetchWeather() *weatherView {
