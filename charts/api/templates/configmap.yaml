@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tiny-dash-api.fullname" . }}
+  labels:
+    {{- include "tiny-dash-api.labels" . | nindent 4 }}
+data:
+  TINYDASH_HA_BASE_URL: {{ .Values.config.haBaseUrl | quote }}
+  TINYDASH_WEATHER_ENTITY: {{ .Values.config.weatherEntity | quote }}
+  {{- range $key, $val := .Values.config.extraEnv }}
+  {{ $key }}: {{ $val | quote }}
+  {{- end }}

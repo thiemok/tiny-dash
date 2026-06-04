@@ -1,0 +1,15 @@
+tiny-dash api deployed as release {{ .Release.Name }}.
+
+Image:   {{ include "tiny-dash-api.image" . }}
+Service: {{ include "tiny-dash-api.fullname" . }} ({{ .Values.service.type }}) on port {{ .Values.service.port }}
+
+Check it:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "tiny-dash-api.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -fs localhost:8080/api/hello   # -> Hello, World!
+
+{{- if not .Values.secret.existingSecret }}
+{{- if not .Values.secret.token }}
+
+WARNING: No Home Assistant token configured. Set secret.token or secret.existingSecret.
+{{- end }}
+{{- end }}

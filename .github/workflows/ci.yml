@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Job id `validate` is the stable status-check context referenced by the branch
+  # ruleset (.github/rulesets/branch-main.json). Keep it in sync if renamed.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so `nx affected` can compute the base/head diff.
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: |
+            api/go.sum
+            inky/go.sum
+            picoDevice/go.sum
+            util/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Derives the correct base/head SHAs for `nx affected` on push and PRs.
+      - name: Derive affected SHAs
+        uses: nrwl/nx-set-shas@v4
+
+      # Firmware projects (inky, picoDevice) build/flash with TinyGo, which is not
+      # installed on this runner, so they are excluded here. Standard Go projects
+      # (api, util) are linted, tested, and built in full.
+      # Follow-up: a dedicated TinyGo job can cover the firmware projects.
+      - name: Lint, test, build affected
+        run: pnpm nx affected -t lint test build --exclude=picoDevice,inky

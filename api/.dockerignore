@@ -1,0 +1,13 @@
+# Build artifacts
+dist/
+
+# Dev-only tooling (flatpak Chrome wrapper, etc.)
+tools/
+
+# Local config may contain secrets; config is injected at runtime instead.
+config.yaml
+
+# Docs and container meta — not needed in the build context.
+*.md
+Dockerfile
+.dockerignore
