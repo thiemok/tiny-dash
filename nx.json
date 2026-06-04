@@ -35,5 +35,26 @@
         "tidyTargetName": "tidy"
       }
     }
-  ]
+  ],
+  "release": {
+    "projects": [
+      "api"
+    ],
+    "releaseTagPattern": "api-v{version}",
+    "git": {
+      "commit": true,
+      "tag": true,
+      "push": true,
+      "commitMessage": "chore(release): publish api {version} [skip ci]"
+    },
+    "version": {
+      "conventionalCommits": true
+    },
+    "changelog": {
+      "workspaceChangelog": false,
+      "projectChangelogs": {
+        "createRelease": "github"
+      }
+    }
+  }
 }

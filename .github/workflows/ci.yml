@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Run JS actions on Node 24 (Node 20 is being removed from the runners).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # Job id `validate` is the stable status-check context referenced by the branch
+  # ruleset (.github/rulesets/branch-main.json). Keep it in sync if renamed.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history so `nx affected` can compute the base/head diff.
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: |
+            api/go.sum
+            inky/go.sum
+            picoDevice/go.sum
+            util/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Derives the correct base/head SHAs for `nx affected` on push and PRs.
+      - name: Derive affected SHAs
+        uses: nrwl/nx-set-shas@3e9ad7370203c1e93d109be57f3b72eb0eb511b1 # v4.4.0
+
+      # Firmware projects (inky, picoDevice) build/flash with TinyGo, which is not
+      # installed on this runner, so they are excluded here. Standard Go projects
+      # (api, util) are linted, tested, and built in full.
+      # Follow-up: a dedicated TinyGo job can cover the firmware projects.
+      - name: Lint, test, build affected
+        run: pnpm nx affected -t lint test build --exclude=picoDevice,inky

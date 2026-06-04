@@ -1,0 +1,99 @@
+# Default values for the tiny-dash api chart.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/thiemok/tiny-dash/api
+  pullPolicy: IfNotPresent
+  # Defaults to the chart's appVersion. The release workflow keeps appVersion in sync
+  # with the latest api-v* release, so leaving this empty deploys the matching image.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 80          # service port; targets the container's 8080
+  annotations: {}
+
+# Non-secret runtime configuration. Rendered into a ConfigMap and exposed as
+# TINYDASH_* environment variables (see api/internal/config/config.go).
+config:
+  # Home Assistant base URL.
+  haBaseUrl: "http://homeassistant.local:8123"
+  # Home Assistant entity IDs the dashboard reads.
+  weatherEntity: "weather.home"
+  # Extra TINYDASH_* env vars as key/value (keys are used verbatim, e.g. TINYDASH_HA_BASE_URL).
+  extraEnv: {}
+
+# Home Assistant long-lived token (the one secret).
+# Option A (default): set token here and the chart creates a Secret.
+# Option B: set existingSecret to the name of a Secret you manage that contains
+#           key `TINYDASH_HA_TOKEN`, and leave token empty.
+secret:
+  token: ""
+  existingSecret: ""
+
+# CHROME_PATH is baked into the image; override only if you use a custom image.
+chromePath: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    # Chrome is memory-hungry while rendering; give it headroom.
+    memory: 1Gi
+
+# /dev/shm is small by default in containers; Chrome benefits from a larger shared
+# memory mount. Mounts an emptyDir of medium Memory at /dev/shm when enabled.
+dshm:
+  enabled: true
+  sizeLimit: 256Mi
+
+livenessProbe:
+  httpGet:
+    path: /api/hello
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 20
+readinessProbe:
+  httpGet:
+    path: /api/hello
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: tiny-dash.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

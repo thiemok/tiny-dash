@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# Serialize releases; never cancel a release mid-flight.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # nx release pushes the changelog commit + tag and creates the GitHub Release
+  packages: write   # push the container image to GHCR
+
+env:
+  IMAGE: ghcr.io/thiemok/tiny-dash/api
+  # Run JS actions on Node 24 (Node 20 is being removed from the runners).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Mint a short-lived installation token for the release GitHub App. This token is
+      # the ruleset bypass actor (actor_type "Integration"), so nx release can push the
+      # changelog commit + tag to protected main. Unlike the default GITHUB_TOKEN, an app
+      # token can bypass branch protection.
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: api/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Attribute the release commit + tag to the app's bot user.
+      - name: Resolve app bot user id
+        id: bot
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          slug="${{ steps.app-token.outputs.app-slug }}"
+          uid="$(gh api "/users/${slug}[bot]" --jq .id)"
+          echo "name=${slug}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=${uid}+${slug}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "${{ steps.bot.outputs.name }}"
+          git config user.email "${{ steps.bot.outputs.email }}"
+
+      - name: Record current api version tag
+        id: prev
+        run: echo "tag=$(git tag -l 'api-v*' --sort=-v:refname | head -n1)" >> "$GITHUB_OUTPUT"
+
+      # Versions from conventional commits, writes api/CHANGELOG.md, creates the api-v* tag,
+      # pushes both, and creates the GitHub Release. No-op (exit 0) when there are no
+      # release-worthy commits since the last tag. When no api-v* tag exists yet, this is
+      # the first release, which needs --first-release to skip "already released" checks.
+      - name: nx release
+        env:
+          # Used by nx for creating the GitHub Release (and as the git push credential).
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          first=""
+          if [ -z "${{ steps.prev.outputs.tag }}" ]; then
+            echo "No existing api-v* tag — running the first release."
+            first="--first-release"
+          fi
+          pnpm nx release --yes $first
+
+      - name: Resolve released version
+        id: ver
+        run: |
+          NEW="$(git tag -l 'api-v*' --sort=-v:refname | head -n1)"
+          if [ -z "$NEW" ] || [ "$NEW" = "${{ steps.prev.outputs.tag }}" ]; then
+            echo "No new release was created; skipping image build."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "version=${NEW#api-v}" >> "$GITHUB_OUTPUT"
+            echo "Released $NEW"
+          fi
+
+      # Keep the Helm chart's appVersion/version in sync with the released image so a plain
+      # `helm upgrade --install` deploys the matching version. Committed with [skip ci] so the
+      # bot's push (via the app token) does not retrigger this workflow.
+      - name: Sync Helm chart version
+        if: steps.ver.outputs.released == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          yq -i ".version = \"$VERSION\" | .appVersion = \"$VERSION\"" charts/api/Chart.yaml
+          git add charts/api/Chart.yaml
+          git commit -m "chore(release): sync helm chart to api-v$VERSION [skip ci]"
+          git push origin HEAD:main
+
+      - name: Log in to GHCR
+        if: steps.ver.outputs.released == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        if: steps.ver.outputs.released == 'true'
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=latest
+            type=sha
+
+      - name: Set up Docker Buildx
+        if: steps.ver.outputs.released == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build and push image
+        if: steps.ver.outputs.released == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: api
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
