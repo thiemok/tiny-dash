@@ -15,6 +15,8 @@ permissions:
 
 env:
   IMAGE: ghcr.io/thiemok/tiny-dash/api
+  # Run JS actions on Node 24 (Node 20 is being removed from the runners).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   release:
@@ -26,28 +28,28 @@ jobs:
       # token can bypass branch protection.
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: .go-version
           cache-dependency-path: api/go.sum
@@ -106,7 +108,7 @@ jobs:
 
       # Keep the Helm chart's appVersion/version in sync with the released image so a plain
       # `helm upgrade --install` deploys the matching version. Committed with [skip ci] so the
-      # bot's push (via PAT) does not retrigger this workflow.
+      # bot's push (via the app token) does not retrigger this workflow.
       - name: Sync Helm chart version
         if: steps.ver.outputs.released == 'true'
         run: |
@@ -118,7 +120,7 @@ jobs:
 
       - name: Log in to GHCR
         if: steps.ver.outputs.released == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -127,7 +129,7 @@ jobs:
       - name: Docker metadata
         if: steps.ver.outputs.released == 'true'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.IMAGE }}
           tags: |
@@ -137,11 +139,11 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.ver.outputs.released == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build and push image
         if: steps.ver.outputs.released == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: api
           push: true
