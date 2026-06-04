@@ -81,6 +81,8 @@ jobs:
       # pushes both, and creates the GitHub Release. No-op (exit 0) when there are no
       # release-worthy commits since the last tag. When no api-v* tag exists yet, this is
       # the first release, which needs --first-release to skip "already released" checks.
+      # --skip-publish: we ship a container (built below), not a go-gettable module, so the
+      # gonx Go-module publish step (go list against the Go proxy) must not run.
       - name: nx release
         env:
           # Used by nx for creating the GitHub Release (and as the git push credential).
@@ -91,7 +93,7 @@ jobs:
             echo "No existing api-v* tag — running the first release."
             first="--first-release"
           fi
-          pnpm nx release --yes $first
+          pnpm nx release --yes --skip-publish $first
 
       - name: Resolve released version
         id: ver
