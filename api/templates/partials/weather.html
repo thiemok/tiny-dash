@@ -5,8 +5,10 @@
         <span class="weather-temp">{{printf "%.0f" .Weather.Temperature}}&deg;</span>
     </div>
     <div class="weather-meta">
-        <span class="weather-highlow"><span class="arrow-up"></span>{{printf "%.0f" .Weather.TempHigh}}&deg; <span class="arrow-down"></span>{{printf "%.0f" .Weather.TempLow}}&deg;</span>
-        <span class="weather-sun"><span class="sun-rise"></span>{{.Weather.SunriseStr}} <span class="sun-set"></span>{{.Weather.SunsetStr}}</span>
+        <span><span class="arrow-up"></span>{{printf "%.0f" .Weather.TempHigh}}&deg;</span>
+        <span><span class="sun-rise"></span>{{.Weather.SunriseStr}}</span>
+        <span><span class="arrow-down"></span>{{printf "%.0f" .Weather.TempLow}}&deg;</span>
+        <span><span class="sun-set"></span>{{.Weather.SunsetStr}}</span>
     </div>
 </div>
 {{if .Weather.HourlyForecast}}

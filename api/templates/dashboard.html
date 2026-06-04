@@ -147,6 +147,7 @@
             /* --- Weather layout --- */
             .weather {
               border: 2px solid #000;
+              border-radius: 8px;
               padding: 8px 12px;
               display: flex;
               align-items: center;
@@ -169,9 +170,10 @@
               line-height: 1;
             }
             .weather-meta {
-              display: flex;
-              flex-direction: column;
-              gap: 2px;
+              display: grid;
+              grid-template-columns: auto auto;
+              gap: 2px 10px;
+              justify-content: start;
               font-size: 14px;
             }
             .weather-forecast {
@@ -196,6 +198,7 @@
             .calendar {
               flex: 1;
               border: 2px solid #000;
+              border-radius: 8px;
               padding: 8px 12px;
               display: flex;
               flex-direction: column;
@@ -270,6 +273,7 @@
             .departures {
               flex: 1;
               border: 2px solid #000;
+              border-radius: 8px;
               padding: 8px 12px;
               display: flex;
               flex-direction: column;
