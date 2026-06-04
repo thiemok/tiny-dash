@@ -303,6 +303,78 @@
               color: #c00;
             }
 
+            /* --- Departures --- */
+            .departures {
+              border: 2px solid #000;
+              padding: 12px 16px;
+              display: flex;
+              flex-direction: column;
+              gap: 6px;
+            }
+            .dep-header {
+              font-size: 20px;
+              font-weight: bold;
+              border-bottom: 1px solid #000;
+              padding-bottom: 4px;
+              margin-bottom: 2px;
+            }
+            .dep-empty {
+              font-size: 16px;
+              color: #555;
+              font-style: italic;
+            }
+            .dep-list {
+              list-style: none;
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+            }
+            .dep-row {
+              display: flex;
+              align-items: baseline;
+              gap: 10px;
+              font-size: 16px;
+              line-height: 1.2;
+            }
+            .dep-line {
+              flex: 0 0 44px;
+              text-align: center;
+              font-weight: bold;
+              background: #000;
+              color: #fff;
+              padding: 2px 4px;
+              border-radius: 3px;
+            }
+            .dep-dir {
+              flex: 1;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+            .dep-time {
+              flex: 0 0 auto;
+              font-variant-numeric: tabular-nums;
+            }
+            .dep-delay {
+              color: #c00;
+              font-weight: bold;
+            }
+            .dep-eta {
+              flex: 0 0 70px;
+              text-align: right;
+              font-weight: bold;
+              color: #0044cc;
+              font-variant-numeric: tabular-nums;
+            }
+            .dep-cancelled .dep-dir,
+            .dep-cancelled .dep-time {
+              text-decoration: line-through;
+              color: #888;
+            }
+            .dep-cancelled .dep-eta {
+              color: #c00;
+            }
+
             .color-bar {
               display: flex;
               height: 32px;
@@ -337,6 +409,11 @@
             {{if .Calendar}}
             <div class="calendar">
                 {{template "calendar" .}}
+            </div>
+            {{end}}
+            {{if .Departures}}
+            <div class="departures">
+                {{template "departures" .}}
             </div>
             {{end}}
         </div>

@@ -71,6 +71,23 @@ type calendarView struct {
 	Timed  []eventView
 }
 
+// departureRow holds a single upcoming departure for the template.
+type departureRow struct {
+	Line          string
+	Direction     string
+	TimeStr       string
+	Minutes       int    // minutes until departure
+	MinutesStr    string // "now", "5 min", "1 h 10"
+	Delay         int    // minutes late (0 = on time)
+	Cancelled     bool
+	Alerts        bool
+}
+
+// departuresView holds the list of upcoming departures.
+type departuresView struct {
+	Departures []departureRow
+}
+
 // conditionClass maps HA weather condition strings to CSS class names for icons.
 var conditionClass = map[string]string{
 	"sunny":           "wi-sunny",
@@ -99,8 +116,9 @@ type templateData struct {
 	Dots     []bool // 12 entries, true = filled (elapsed 5-min block)
 	Date     string
 	Swatches []template.CSS
-	Weather  *weatherView
-	Calendar *calendarView
+	Weather    *weatherView
+	Calendar   *calendarView
+	Departures *departuresView
 }
 
 func minuteDots(minute int) []bool {
@@ -132,8 +150,59 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 
 	data.Weather = h.fetchWeather()
 	data.Calendar = h.fetchCalendar(now)
+	data.Departures = h.fetchDepartures(now)
 
 	return data
+}
+
+// formatMinutesUntil produces a compact "in X" style label.
+func formatMinutesUntil(m int) string {
+	if m <= 0 {
+		return "now"
+	}
+	if m < 60 {
+		return fmt.Sprintf("%d min", m)
+	}
+	h := m / 60
+	rem := m % 60
+	if rem == 0 {
+		return fmt.Sprintf("%d h", h)
+	}
+	return fmt.Sprintf("%d h %02d", h, rem)
+}
+
+func (h *DashboardHandler) fetchDepartures(now time.Time) *departuresView {
+	ids := h.config.Departures.EntityIDs
+	if len(ids) == 0 {
+		return nil
+	}
+
+	departures, err := h.haClient.GetUpcomingDepartures(ids, 6)
+	if err != nil {
+		log.Printf("departures fetch error: %v", err)
+		return nil
+	}
+
+	view := &departuresView{}
+	for _, d := range departures {
+		t := d.Estimated
+		if t.IsZero() {
+			t = d.Planned
+		}
+		row := departureRow{
+			Line:       d.Line,
+			Direction:  d.Direction,
+			TimeStr:    t.Format("15:04"),
+			Minutes:    d.MinutesUntil(now),
+			Delay:      d.DelayMinutes(),
+			Cancelled:  d.Cancelled,
+			Alerts:     d.Alerts,
+		}
+		row.MinutesStr = formatMinutesUntil(row.Minutes)
+		view.Departures = append(view.Departures, row)
+	}
+
+	return view
 }
 
 // calendarPalette assigns an accent color per source calendar (cycled).
