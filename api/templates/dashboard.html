@@ -25,28 +25,51 @@
             }
             .clock {
               display: flex;
-              align-items: center;
-              gap: 12px;
+              align-items: flex-end;
             }
-            .clock-hour {
-              font-size: 56px;
-              font-weight: bold;
-              line-height: 1;
-              letter-spacing: 1px;
-            }
-            .clock-dots {
+            /* --- Clock: day-curve strip ---
+               24 hours as a noon-peak silhouette. Elapsed hours are solid, the
+               current hour carries a caret + a bottom-up minute fill, future
+               hours are outlined. 6-hour quarter gaps act as landmarks so the
+               hour reads at a glance. Solid black only — no grays, which
+               speckle when dithered to the e-ink palette. */
+            .clock-strip {
               display: flex;
-              gap: 4px;
+              align-items: flex-end;
+              gap: 2px;
+              padding-top: 12px; /* room for the caret above the tallest cell */
             }
-            .clock-dots .dot {
-              width: 11px;
-              height: 11px;
-              border-radius: 50%;
+            .clock-cell {
+              width: 9px;
               border: 2px solid #000;
-              background: transparent;
+              background: #fff;
+              position: relative;
             }
-            .clock-dots .dot.filled {
+            .clock-cell.past {
               background: #000;
+            }
+            .clock-cell.qstart {
+              margin-left: 12px;
+            }
+            /* The current hour is accented red (matching the dashboard's
+               "now/urgent" color) so it pops against the black elapsed bars. */
+            .clock-fill {
+              position: absolute;
+              left: 0;
+              bottom: 0;
+              width: 100%;
+              background: #c00;
+            }
+            .clock-caret {
+              position: absolute;
+              top: -10px;
+              left: 50%;
+              transform: translateX(-50%);
+              width: 0;
+              height: 0;
+              border-left: 6px solid transparent;
+              border-right: 6px solid transparent;
+              border-top: 8px solid #c00;
             }
             .date {
               font-size: 22px;

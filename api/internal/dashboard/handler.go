@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -107,13 +108,29 @@ var conditionClass = map[string]string{
 	"exceptional":     "wi-cloudy",
 }
 
+// hourCell is one hour of the day-curve clock strip. The 24 cells form a
+// noon-peak silhouette (short at night, tall around midday) so the current
+// hour is readable at a glance from its position on the curve.
+type hourCell struct {
+	Height int  // px; follows the day curve
+	Fill   int  // 0-100, minute fill of the current hour (set on Now only)
+	Past   bool // an elapsed hour (solid)
+	Now    bool // the current hour (caret + minute fill)
+	QStart bool // first hour of a 6-hour quarter (adds a landmark gap)
+}
+
+// Day-curve cell height bounds, in px, tuned for the 800x480 header.
+const (
+	clockCellMin = 14
+	clockCellMax = 46
+)
+
 // templateData holds values passed to the dashboard template.
 type templateData struct {
 	Width    int
 	Height   int
 	Time     string
-	Hour     string
-	Dots     []bool // 12 entries, true = filled (elapsed 5-min block)
+	Cells    []hourCell // 24-hour day-curve clock strip
 	Date     string
 	Swatches     []template.CSS
 	ShowSwatches bool
@@ -122,13 +139,26 @@ type templateData struct {
 	Departures   *departuresView
 }
 
-func minuteDots(minute int) []bool {
-	filled := minute / 5
-	dots := make([]bool, 12)
-	for i := range filled {
-		dots[i] = true
+// hourCells builds the 24-hour day-curve strip for the given time. Minute is
+// quantized to 5 minutes, matching the e-ink refresh cadence so a stale frame
+// never shows a misleading sub-block.
+func hourCells(now time.Time) []hourCell {
+	hour := now.Hour()
+	fill := (now.Minute() / 5) * 100 / 12
+	cells := make([]hourCell, 24)
+	for i := range cells {
+		bump := 0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/24)
+		cells[i] = hourCell{
+			Height: clockCellMin + int(bump*float64(clockCellMax-clockCellMin)),
+			Past:   i < hour,
+			Now:    i == hour,
+			QStart: i != 0 && i%6 == 0,
+		}
+		if i == hour {
+			cells[i].Fill = fill
+		}
 	}
-	return dots
+	return cells
 }
 
 func (h *DashboardHandler) newTemplateData(width, height int, palette render.Palette, mock bool) templateData {
@@ -143,8 +173,7 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 		Width:    width,
 		Height:   height,
 		Time:     now.Format("15:04"),
-		Hour:     now.Format("15"),
-		Dots:     minuteDots(now.Minute()),
+		Cells:    hourCells(now),
 		Date:     now.Format("Mon, 02 Jan '06"),
 		Swatches: swatches,
 	}
@@ -372,7 +401,9 @@ func (h *DashboardHandler) handleDashboard(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *DashboardHandler) handleClock(w http.ResponseWriter, r *http.Request) {
-	data := h.newTemplateData(0, 0, nil, false)
+	// The clock partial refreshes every 10s; only the strip is needed, so skip
+	// the Home Assistant fetches that newTemplateData would otherwise perform.
+	data := templateData{Cells: hourCells(time.Now())}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "clock", data); err != nil {
 		log.Printf("template error: %v", err)
