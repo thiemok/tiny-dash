@@ -26,6 +26,9 @@ func main() {
 	haClient := homeassistant.NewClient(cfg.HA.BaseURL, cfg.HA.Token)
 
 	chromePath := os.Getenv("CHROME_PATH")
+	if chromePath != "" {
+		log.Printf("Using Chrome executable at %s", chromePath)
+	}
 	renderer, err := render.NewRenderer(chromePath)
 	if err != nil {
 		log.Fatalf("Failed to start renderer: %v", err)
