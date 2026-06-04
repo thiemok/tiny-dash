@@ -1,0 +1,16 @@
+ha:
+  baseUrl: "http://homeassistant.local:8123"
+  token: "your-long-lived-access-token"
+
+weather:
+  entityId: "weather.home"
+
+calendar:
+  entityIds:
+    - "calendar.personal"
+    - "calendar.work"
+
+departures:
+  entityIds:
+    - "sensor.station_north_departures"
+    - "sensor.station_south_departures"

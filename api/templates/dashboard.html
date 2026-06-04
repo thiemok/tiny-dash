@@ -1,85 +1,410 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>tiny-dash</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Courier New', monospace;
-    background: #fff;
-    color: #000;
-    width: {{.Width}}px;
-    height: {{.Height}}px;
-    overflow: hidden;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-  }
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: 24px;
-  }
-  .time {
-    font-size: 64px;
-    font-weight: bold;
-    letter-spacing: 2px;
-  }
-  .date {
-    font-size: 28px;
-    text-align: right;
-  }
-  .status {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 12px;
-  }
-  .status-row {
-    font-size: 24px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .status-row .dot {
-    display: inline-block;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #000;
-  }
-  .status-row .dot.online { background: #00ff00; }
-  .color-bar {
-    display: flex;
-    height: 32px;
-    margin-top: auto;
-    gap: 4px;
-  }
-  .color-bar .swatch {
-    flex: 1;
-    border: 1px solid #000;
-  }
-</style>
-<script src="/static/htmx.min.js"></script>
-</head>
-<body>
-  <div class="header">
-    <div class="time" hx-get="/dashboard/partials/clock" hx-trigger="every 10s" hx-swap="innerHTML">
-      {{template "clock" .}}
-    </div>
-    <div class="date">{{.Date}}</div>
-  </div>
-  <div class="status" hx-get="/dashboard/partials/status" hx-trigger="every 10s" hx-swap="innerHTML">
-    {{template "status" .}}
-  </div>
-  <div class="color-bar">
-    {{range .Swatches}}
-    <div class="swatch" style="background:{{.}}"></div>
-    {{end}}
-  </div>
-</body>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>tiny-dash</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+              font-family: 'Courier New', monospace;
+              background: #fff;
+              color: #000;
+              width: {{.Width}}px;
+              height: {{.Height}}px;
+              overflow: hidden;
+              padding: 12px 16px;
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            }
+            .clock {
+              display: flex;
+              align-items: flex-end;
+            }
+            /* --- Clock: day-curve strip ---
+               24 hours as a noon-peak silhouette. Elapsed hours are solid, the
+               current hour carries a caret + a bottom-up minute fill, future
+               hours are outlined. 6-hour quarter gaps act as landmarks so the
+               hour reads at a glance. Solid black only — no grays, which
+               speckle when dithered to the e-ink palette. */
+            .clock-strip {
+              display: flex;
+              align-items: flex-end;
+              gap: 2px;
+              padding-top: 12px; /* room for the caret above the tallest cell */
+            }
+            .clock-cell {
+              width: 9px;
+              border: 2px solid #000;
+              background: #fff;
+              position: relative;
+            }
+            .clock-cell.past {
+              background: #000;
+            }
+            .clock-cell.qstart {
+              margin-left: 12px;
+            }
+            /* The current hour is accented red (matching the dashboard's
+               "now/urgent" color) so it pops against the black elapsed bars. */
+            .clock-fill {
+              position: absolute;
+              left: 0;
+              bottom: 0;
+              width: 100%;
+              background: #c00;
+            }
+            .clock-caret {
+              position: absolute;
+              top: -10px;
+              left: 50%;
+              transform: translateX(-50%);
+              width: 0;
+              height: 0;
+              border-left: 6px solid transparent;
+              border-right: 6px solid transparent;
+              border-top: 8px solid #c00;
+            }
+            .date {
+              font-size: 22px;
+              text-align: right;
+            }
+            .content {
+              flex: 1;
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 10px;
+              min-height: 0;
+            }
+            .content-col {
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+              min-height: 0;
+            }
+            /* --- Weather icons (Material Design Icons, mask-tinted) --- */
+            /* Vendored SVGs in static/icons/ are tinted via mask-image so each
+               condition can use a saturated, palette-aligned color. Mid-grays are
+               avoided on purpose: they speckle badly when Floyd-Steinberg dithered
+               to the e-ink palette, so neutral icons are rendered pure black. */
+            .wi {
+              display: inline-block;
+              -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+              -webkit-mask-position: center; mask-position: center;
+              -webkit-mask-size: contain; mask-size: contain;
+            }
+            .wi-lg { width: 36px; height: 36px; }
+            .wi-sm { width: 22px; height: 22px; }
+
+            .wi-sunny        { -webkit-mask-image: url(/static/icons/weather-sunny.svg);         mask-image: url(/static/icons/weather-sunny.svg);         background-color: #e08000; }
+            .wi-night        { -webkit-mask-image: url(/static/icons/weather-night.svg);         mask-image: url(/static/icons/weather-night.svg);         background-color: #000000; }
+            .wi-partlycloudy { -webkit-mask-image: url(/static/icons/weather-partly-cloudy.svg); mask-image: url(/static/icons/weather-partly-cloudy.svg); background-color: #000000; }
+            .wi-cloudy       { -webkit-mask-image: url(/static/icons/weather-cloudy.svg);        mask-image: url(/static/icons/weather-cloudy.svg);        background-color: #000000; }
+            .wi-rainy        { -webkit-mask-image: url(/static/icons/weather-rainy.svg);         mask-image: url(/static/icons/weather-rainy.svg);         background-color: #0044cc; }
+            .wi-pouring      { -webkit-mask-image: url(/static/icons/weather-pouring.svg);       mask-image: url(/static/icons/weather-pouring.svg);       background-color: #0044cc; }
+            .wi-snowy        { -webkit-mask-image: url(/static/icons/weather-snowy.svg);         mask-image: url(/static/icons/weather-snowy.svg);         background-color: #000000; }
+            .wi-fog          { -webkit-mask-image: url(/static/icons/weather-fog.svg);           mask-image: url(/static/icons/weather-fog.svg);           background-color: #000000; }
+            .wi-lightning    { -webkit-mask-image: url(/static/icons/weather-lightning.svg);     mask-image: url(/static/icons/weather-lightning.svg);     background-color: #e08000; }
+            .wi-windy        { -webkit-mask-image: url(/static/icons/weather-windy.svg);         mask-image: url(/static/icons/weather-windy.svg);         background-color: #000000; }
+
+            /* Inline arrow/sun indicators for meta row */
+            .arrow-up, .arrow-down { display: inline-block; width: 0; height: 0; margin: 0 2px; vertical-align: middle; }
+            .arrow-up {
+              border-left: 5px solid transparent; border-right: 5px solid transparent;
+              border-bottom: 7px solid #c00;
+            }
+            .arrow-down {
+              border-left: 5px solid transparent; border-right: 5px solid transparent;
+              border-top: 7px solid #0044cc;
+            }
+            .sun-rise, .sun-set {
+              display: inline-flex; align-items: center; gap: 2px;
+              margin: 0 4px 0 0; vertical-align: middle;
+            }
+            .sun-rise::before, .sun-set::before {
+              content: ''; display: inline-block;
+              width: 12px; height: 12px; border-radius: 50%;
+              background: #e08000;
+            }
+            .sun-rise::after {
+              content: ''; display: inline-block; width: 0; height: 0;
+              border-left: 5px solid transparent; border-right: 5px solid transparent;
+              border-bottom: 7px solid #e08000;
+            }
+            .sun-set::before { background: #c04000; }
+            .sun-set::after {
+              content: ''; display: inline-block; width: 0; height: 0;
+              border-left: 5px solid transparent; border-right: 5px solid transparent;
+              border-top: 7px solid #c04000;
+            }
+
+            /* --- Weather layout --- */
+            .weather {
+              border: 2px solid #000;
+              border-radius: 8px;
+              padding: 8px 12px;
+              display: flex;
+              align-items: center;
+              gap: 12px;
+            }
+            .weather-now {
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+              min-width: 120px;
+            }
+            .weather-current {
+              display: flex;
+              align-items: center;
+              gap: 10px;
+            }
+            .weather-temp {
+              font-weight: bold;
+              font-size: 30px;
+              line-height: 1;
+            }
+            .weather-meta {
+              display: grid;
+              grid-template-columns: auto auto;
+              gap: 2px 10px;
+              justify-content: start;
+              font-size: 14px;
+            }
+            .weather-forecast {
+              display: flex;
+              flex: 1;
+              justify-content: space-around;
+              align-items: center;
+              border-left: 2px solid #000;
+              padding-left: 10px;
+            }
+            .forecast-entry {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 2px;
+              font-size: 13px;
+            }
+            .forecast-time {
+              font-weight: bold;
+            }
+            /* --- Calendar --- */
+            .calendar {
+              flex: 1;
+              border: 2px solid #000;
+              border-radius: 8px;
+              padding: 8px 12px;
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+              min-height: 0;
+              overflow: hidden;
+            }
+            .cal-header {
+              font-size: 16px;
+              font-weight: bold;
+              border-bottom: 1px solid #000;
+              padding-bottom: 2px;
+              margin-bottom: 2px;
+            }
+            .cal-empty {
+              font-size: 14px;
+              color: #555;
+              font-style: italic;
+            }
+            .cal-list {
+              list-style: none;
+              display: flex;
+              flex-direction: column;
+              gap: 2px;
+            }
+            .cal-list-wrap {
+              flex: 1;
+              min-height: 0;
+              overflow: hidden;
+              -webkit-mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
+                      mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
+            }
+            .cal-allday { margin-bottom: 2px; }
+            .cal-event {
+              display: flex;
+              align-items: baseline;
+              gap: 8px;
+              font-size: 13px;
+              line-height: 1.2;
+            }
+            .cal-dot {
+              flex: 0 0 10px;
+              width: 10px;
+              height: 10px;
+              border-radius: 50%;
+              align-self: center;
+            }
+            .cal-time {
+              flex: 0 0 58px;
+              font-weight: bold;
+              font-variant-numeric: tabular-nums;
+              white-space: nowrap;
+            }
+            .cal-summary {
+              flex: 1;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+            .cal-location {
+              color: #555;
+              font-size: 12px;
+            }
+            .cal-ongoing .cal-summary {
+              font-weight: bold;
+            }
+            .cal-ongoing .cal-time {
+              color: #c00;
+            }
+
+            /* --- Departures --- */
+            .departures {
+              flex: 1;
+              border: 2px solid #000;
+              border-radius: 8px;
+              padding: 8px 12px;
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+              min-height: 0;
+              overflow: hidden;
+            }
+            .dep-list-wrap {
+              flex: 1;
+              min-height: 0;
+              overflow: hidden;
+              -webkit-mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
+                      mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
+            }
+            .dep-header {
+              font-size: 16px;
+              font-weight: bold;
+              border-bottom: 1px solid #000;
+              padding-bottom: 2px;
+              margin-bottom: 2px;
+            }
+            .dep-empty {
+              font-size: 14px;
+              color: #555;
+              font-style: italic;
+            }
+            .dep-list {
+              list-style: none;
+              display: flex;
+              flex-direction: column;
+              gap: 4px;
+            }
+            .dep-row {
+              display: flex;
+              align-items: baseline;
+              gap: 8px;
+              font-size: 14px;
+              line-height: 1.2;
+            }
+            .dep-line {
+              flex: 0 0 38px;
+              text-align: center;
+              font-weight: bold;
+              background: #000;
+              color: #fff;
+              padding: 2px 3px;
+              border-radius: 3px;
+              font-size: 13px;
+            }
+            .dep-dir {
+              flex: 1;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+            .dep-time {
+              flex: 0 0 auto;
+              font-variant-numeric: tabular-nums;
+            }
+            .dep-delay {
+              color: #c00;
+              font-weight: bold;
+            }
+            .dep-eta {
+              flex: 0 0 56px;
+              text-align: right;
+              font-weight: bold;
+              color: #0044cc;
+              font-variant-numeric: tabular-nums;
+            }
+            .dep-cancelled .dep-dir,
+            .dep-cancelled .dep-time {
+              text-decoration: line-through;
+              color: #888;
+            }
+            .dep-cancelled .dep-eta {
+              color: #c00;
+            }
+
+            .color-bar {
+              display: flex;
+              height: 32px;
+              margin-top: auto;
+              gap: 4px;
+            }
+            .color-bar .swatch {
+              flex: 1;
+              border: 1px solid #000;
+            }
+        </style>
+        <script src="/static/htmx.min.js"></script>
+    </head>
+    <body>
+        <div class="header">
+            <div
+                class="clock"
+                hx-get="/dashboard/partials/clock"
+                hx-trigger="every 10s"
+                hx-swap="innerHTML"
+            >
+                {{template "clock" .}}
+            </div>
+            <div class="date">{{.Date}}</div>
+        </div>
+        <div class="content">
+            <div class="content-col">
+                {{if .Weather}}
+                <div class="weather">
+                    {{template "weather" .}}
+                </div>
+                {{end}}
+                {{if .Departures}}
+                <div class="departures">
+                    {{template "departures" .}}
+                </div>
+                {{end}}
+            </div>
+            <div class="content-col">
+                {{if .Calendar}}
+                <div class="calendar">
+                    {{template "calendar" .}}
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{if .ShowSwatches}}
+        <div class="color-bar">
+            {{range .Swatches}}
+            <div class="swatch" style="background:{{.}}"></div>
+            {{end}}
+        </div>
+        {{end}}
+    </body>
 </html>

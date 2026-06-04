@@ -1,1 +1,15 @@
-{{define "clock"}}{{.Time}}{{end}}
+{{define "clock"}}
+<div class="clock-strip">
+  {{range .Cells}}
+  <div
+    class="clock-cell{{if .Past}} past{{end}}{{if .Now}} now{{end}}{{if .QStart}} qstart{{end}}"
+    style="height: {{.Height}}px"
+  >
+    {{if .Now}}
+    <span class="clock-caret"></span>
+    <span class="clock-fill" style="height: {{.Fill}}%"></span>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}

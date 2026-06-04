@@ -74,8 +74,14 @@ func (h *ImageHandler) parseParams(r *http.Request) (width, height, colorDepth i
 	return width, height, colorDepth, palette, nil
 }
 
-func (h *ImageHandler) dashboardURL(width, height int, colors string) string {
-	return fmt.Sprintf("%s/dashboard?width=%d&height=%d&colors=%s", h.baseURL, width, height, colors)
+func (h *ImageHandler) dashboardURL(width, height int, colors string, extra ...string) string {
+	url := fmt.Sprintf("%s/dashboard?width=%d&height=%d&colors=%s", h.baseURL, width, height, colors)
+	for i := 0; i+1 < len(extra); i += 2 {
+		if extra[i+1] != "" {
+			url += "&" + extra[i] + "=" + extra[i+1]
+		}
+	}
+	return url
 }
 
 func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +98,8 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	colorsParam := r.URL.Query().Get("colors")
-	screenshot, err := h.renderer.CaptureURL(h.dashboardURL(width, height, colorsParam), width, height, h.settleTime)
+	mockParam := r.URL.Query().Get("mock")
+	screenshot, err := h.renderer.CaptureURL(h.dashboardURL(width, height, colorsParam, "mock", mockParam), width, height, h.settleTime)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
 		log.Printf("screenshot error: %v", err)
@@ -119,7 +126,8 @@ func (h *ImageHandler) handlePreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	colorsParam := r.URL.Query().Get("colors")
-	screenshot, err := h.renderer.CaptureURL(h.dashboardURL(width, height, colorsParam), width, height, h.settleTime)
+	mockParam := r.URL.Query().Get("mock")
+	screenshot, err := h.renderer.CaptureURL(h.dashboardURL(width, height, colorsParam, "mock", mockParam), width, height, h.settleTime)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
 		log.Printf("screenshot error: %v", err)
