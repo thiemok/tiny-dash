@@ -40,33 +40,44 @@ spec:
               containerPort: 8080
               protocol: TCP
           envFrom:
-            - configMapRef:
-                name: {{ include "tiny-dash-api.fullname" . }}
+            # Injects TINYDASH_HA_TOKEN, which overrides ha.token from the mounted config.yaml.
             - secretRef:
                 name: {{ include "tiny-dash-api.secretName" . }}
-          {{- with .Values.chromePath }}
           env:
+            - name: CONFIG_PATH
+              value: /etc/tiny-dash/config.yaml
+            {{- with .Values.chromePath }}
             - name: CHROME_PATH
               value: {{ . | quote }}
-          {{- end }}
+            {{- end }}
+            {{- range $key, $val := .Values.config.extraEnv }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if .Values.dshm.enabled }}
           volumeMounts:
+            - name: config
+              mountPath: /etc/tiny-dash
+              readOnly: true
+            {{- if .Values.dshm.enabled }}
             - name: dshm
               mountPath: /dev/shm
-          {{- end }}
-      {{- if .Values.dshm.enabled }}
+            {{- end }}
       volumes:
+        - name: config
+          configMap:
+            name: {{ include "tiny-dash-api.fullname" . }}
+        {{- if .Values.dshm.enabled }}
         - name: dshm
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.dshm.sizeLimit }}
-      {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

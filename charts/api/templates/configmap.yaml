@@ -5,8 +5,21 @@ metadata:
   labels:
     {{- include "tiny-dash-api.labels" . | nindent 4 }}
 data:
-  TINYDASH_HA_BASE_URL: {{ .Values.config.haBaseUrl | quote }}
-  TINYDASH_WEATHER_ENTITY: {{ .Values.config.weatherEntity | quote }}
-  {{- range $key, $val := .Values.config.extraEnv }}
-  {{ $key }}: {{ $val | quote }}
-  {{- end }}
+  # Mounted at CONFIG_PATH and read by api/internal/config/config.go. The HA token is
+  # intentionally omitted here — it is injected as the TINYDASH_HA_TOKEN env var (which
+  # overrides ha.token) from the Secret, so it never lands in this ConfigMap.
+  config.yaml: |
+    ha:
+      baseUrl: {{ .Values.config.haBaseUrl | quote }}
+    weather:
+      entityId: {{ .Values.config.weatherEntity | quote }}
+    calendar:
+      entityIds:
+        {{- range .Values.config.calendarEntityIds }}
+        - {{ . | quote }}
+        {{- end }}
+    departures:
+      entityIds:
+        {{- range .Values.config.departureEntityIds }}
+        - {{ . | quote }}
+        {{- end }}
