@@ -4,6 +4,10 @@ dist/
 # Dev-only tooling (flatpak Chrome wrapper, etc.)
 tools/
 
+# The Helm chart lives in the api project (so chart changes share the api release),
+# but it is not part of the Go build context.
+chart/
+
 # Local config may contain secrets; config is injected at runtime instead.
 config.yaml
 

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tiny-dash-api.fullname" . }}
+  labels:
+    {{- include "tiny-dash-api.labels" . | nindent 4 }}
+data:
+  # Mounted at CONFIG_PATH and read by api/internal/config/config.go. The HA token is
+  # intentionally omitted here — it is injected as the TINYDASH_HA_TOKEN env var (which
+  # overrides ha.token) from the Secret, so it never lands in this ConfigMap.
+  config.yaml: |
+    ha:
+      baseUrl: {{ .Values.config.haBaseUrl | quote }}
+    weather:
+      entityId: {{ .Values.config.weatherEntity | quote }}
+    calendar:
+      entityIds:
+        {{- range .Values.config.calendarEntityIds }}
+        - {{ . | quote }}
+        {{- end }}
+    departures:
+      entityIds:
+        {{- range .Values.config.departureEntityIds }}
+        - {{ . | quote }}
+        {{- end }}

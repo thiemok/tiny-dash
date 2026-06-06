@@ -18,14 +18,23 @@ service:
   port: 80          # service port; targets the container's 8080
   annotations: {}
 
-# Non-secret runtime configuration. Rendered into a ConfigMap and exposed as
-# TINYDASH_* environment variables (see api/internal/config/config.go).
+# Non-secret runtime configuration. Rendered into a ConfigMap as a config.yaml file
+# and mounted at CONFIG_PATH (see api/internal/config/config.go). The HA token is the
+# only secret and is injected separately via `secret` below.
+#
+# These defaults are deliberately generic placeholders — set the real values at deploy
+# time (e.g. via Helm values / an umbrella chart), not here.
 config:
   # Home Assistant base URL.
   haBaseUrl: "http://homeassistant.local:8123"
-  # Home Assistant entity IDs the dashboard reads.
+  # Home Assistant weather entity the dashboard reads.
   weatherEntity: "weather.home"
+  # Home Assistant calendar entity IDs to show.
+  calendarEntityIds: []
+  # Home Assistant departure-board sensor entity IDs to show.
+  departureEntityIds: []
   # Extra TINYDASH_* env vars as key/value (keys are used verbatim, e.g. TINYDASH_HA_BASE_URL).
+  # These are set as container env vars and override the corresponding config.yaml values.
   extraEnv: {}
 
 # Home Assistant long-lived token (the one secret).

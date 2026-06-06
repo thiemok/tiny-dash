@@ -117,8 +117,8 @@ jobs:
         if: steps.ver.outputs.released == 'true'
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          yq -i ".version = \"$VERSION\" | .appVersion = \"$VERSION\"" charts/api/Chart.yaml
-          git add charts/api/Chart.yaml
+          yq -i ".version = \"$VERSION\" | .appVersion = \"$VERSION\"" api/chart/Chart.yaml
+          git add api/chart/Chart.yaml
           git commit -m "chore(release): sync helm chart to api-v$VERSION [skip ci]"
           git push origin HEAD:main
 
@@ -155,3 +155,19 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Package and publish the Helm chart as an OCI artifact so it can be deployed with
+      # `helm install oci://ghcr.io/thiemok/charts/tiny-dash-api`. Chart.yaml was already
+      # synced to the released version above, so the package carries the matching version.
+      - name: Set up Helm
+        if: steps.ver.outputs.released == 'true'
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Publish Helm chart to GHCR
+        if: steps.ver.outputs.released == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package api/chart --destination "$RUNNER_TEMP"
+          helm push "$RUNNER_TEMP/tiny-dash-api-${{ steps.ver.outputs.version }}.tgz" oci://ghcr.io/thiemok/charts
