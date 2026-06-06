@@ -8,5 +8,5 @@ sources:
 # version  — the chart's own version (bumped by the release workflow alongside appVersion).
 # appVersion — the api image version this chart deploys by default (kept in sync with the
 #              api-v* release tag by the release workflow).
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.2.1
+appVersion: "0.2.1"
