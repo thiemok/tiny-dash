@@ -15,9 +15,9 @@ merge to main
 Release (.github/workflows/release.yml)
  ├─ nx release: version from conventional commits → api/CHANGELOG.md
  │              → tag api-v<X.Y.Z> → GitHub Release
- ├─ sync charts/api Chart.yaml (version + appVersion) → commit [skip ci]
+ ├─ sync api/chart Chart.yaml (version + appVersion) → commit [skip ci]
  ├─ docker build api/ → push ghcr.io/thiemok/tiny-dash/api:<X.Y.Z> (+ latest, sha-…)
- └─ helm package charts/api → push oci://ghcr.io/thiemok/charts/tiny-dash-api:<X.Y.Z>
+ └─ helm package api/chart → push oci://ghcr.io/thiemok/charts/tiny-dash-api:<X.Y.Z>
  │
  ▼
 Deploy (manual)   helm upgrade --install …          # build & push only; you roll out
@@ -25,9 +25,11 @@ Deploy (manual)   helm upgrade --install …          # build & push only; you r
 
 Versioning is driven by [Conventional Commits](https://www.conventionalcommits.org/) via
 `nx release` (configured in `nx.json`). `fix:` → patch, `feat:` → minor, `feat!:` /
-`BREAKING CHANGE:` → major. Only commits that affect the `api` project (or shared root
-files) bump it — firmware-only commits (`inky`, `picoDevice`) are ignored, and automated
-release commits are filtered out of the changelog.
+`BREAKING CHANGE:` → major. The Helm chart lives **inside** the `api` project (`api/chart`),
+so api **and** chart changes share one version and are released in unison — every release
+both builds+pushes the image and packages+pushes the chart at the same `<X.Y.Z>` (chart
+`version` == `appVersion`). Firmware-only commits (`inky`, `picoDevice`) are ignored, and
+automated release commits are filtered out of the changelog.
 
 ## Running the image
 
@@ -60,7 +62,7 @@ The Helm chart renders exactly this file into a ConfigMap and mounts it — see 
 
 ## Deploying with Helm
 
-The chart lives in `charts/api` and is also published to
+The chart lives in `api/chart` and is also published to
 `oci://ghcr.io/thiemok/charts/tiny-dash-api`. Its `appVersion` tracks the released image, so
 the image tag defaults to the chart's `appVersion` unless you override `image.tag`. The
 non-secret `config.*` values are rendered into a `config.yaml` ConfigMap and mounted at
@@ -75,7 +77,7 @@ helm upgrade --install tiny-dash-api oci://ghcr.io/thiemok/charts/tiny-dash-api 
   --set 'config.calendarEntityIds={calendar.personal,calendar.work}' \
   --set 'config.departureEntityIds={sensor.station_departures}'
 # pin a specific image: --set image.tag=1.4.0
-# deploy the local chart instead of OCI: replace the ref with ./charts/api
+# deploy the local chart instead of OCI: replace the ref with ./api/chart
 ```
 
 Manage the Home Assistant token yourself instead of via the chart:
@@ -84,7 +86,7 @@ Manage the Home Assistant token yourself instead of via the chart:
 kubectl -n tiny-dash create secret generic ha-token \
   --from-literal=TINYDASH_HA_TOKEN="<token>"
 
-helm upgrade --install tiny-dash-api ./charts/api -n tiny-dash \
+helm upgrade --install tiny-dash-api ./api/chart -n tiny-dash \
   --set secret.existingSecret=ha-token
 ```
 

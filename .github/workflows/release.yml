@@ -117,8 +117,8 @@ jobs:
         if: steps.ver.outputs.released == 'true'
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          yq -i ".version = \"$VERSION\" | .appVersion = \"$VERSION\"" charts/api/Chart.yaml
-          git add charts/api/Chart.yaml
+          yq -i ".version = \"$VERSION\" | .appVersion = \"$VERSION\"" api/chart/Chart.yaml
+          git add api/chart/Chart.yaml
           git commit -m "chore(release): sync helm chart to api-v$VERSION [skip ci]"
           git push origin HEAD:main
 
@@ -169,5 +169,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "$GITHUB_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          helm package charts/api --destination "$RUNNER_TEMP"
+          helm package api/chart --destination "$RUNNER_TEMP"
           helm push "$RUNNER_TEMP/tiny-dash-api-${{ steps.ver.outputs.version }}.tgz" oci://ghcr.io/thiemok/charts
