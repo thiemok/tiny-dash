@@ -1,3 +1,14 @@
+## 0.2.1 (2026-06-06)
+
+### 🚀 Features
+
+- **chart:** mount full HA config via config.yaml and publish to GHCR OCI ([#7](https://github.com/thiemok/tiny-dash/pull/7))
+
+### ❤️ Thank You
+
+- Claude Opus 4.8
+- Thiemo
+
 ## 0.2.0 (2026-06-04)
 
 ### 🚀 Features
