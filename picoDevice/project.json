@@ -33,6 +33,14 @@
         "command": "tinygo monitor",
         "cwd": "picoDevice"
       }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": [],
+      "options": {
+        "command": "echo 'picoDevice has no tests: it is a single TinyGo main package bound to Pico 2 W hardware. Put testable logic in inky/util.'",
+        "cwd": "picoDevice"
+      }
     }
   }
 }

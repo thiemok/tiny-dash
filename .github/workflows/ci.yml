@@ -59,6 +59,11 @@ jobs:
       # Firmware projects (inky, picoDevice) build/flash with TinyGo, which is not
       # installed on this runner, so they are excluded here. Standard Go projects
       # (api, util) are linted, tested, and built in full.
-      # Follow-up: a dedicated TinyGo job can cover the firmware projects.
+      # Follow-up: a dedicated TinyGo job can cover the firmware builds.
       - name: Lint, test, build affected
         run: pnpm nx affected -t lint test build --exclude=picoDevice,inky
+
+      # Firmware tests run on plain host Go: TinyGo-only code (the `machine`
+      # adapter) is behind a `tinygo` build tag, and picoDevice has no tests.
+      - name: Test affected firmware
+        run: pnpm nx affected -t test --exclude='*,!inky,!picoDevice'
