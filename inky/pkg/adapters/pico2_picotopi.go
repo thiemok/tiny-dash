@@ -74,10 +74,26 @@ func (i *Pico2I2C) ReadRegister(addr, register uint8, data []byte) error {
 // Pico2SPI wraps machine.SPI to implement the inky.SPI interface
 type Pico2SPI struct {
 	bus *machine.SPI
+	rx  [64]byte // discarded read-back for write-only transfers, see Tx
 }
 
+// Tx never hands machine.SPI a write-only transfer (r == nil). TinyGo sends
+// those via DMA without setting CHAIN_TO, so every completed transfer also
+// triggers DMA channel 0, which the CYW43439 WiFi driver (piolib) claims for
+// its PIO SPI bus. That leaves the WiFi bus stuck after the first display
+// update. Passing a read buffer selects TinyGo's FIFO-polling path instead.
 func (s *Pico2SPI) Tx(w, r []byte) error {
-	return s.bus.Tx(w, r)
+	if r != nil {
+		return s.bus.Tx(w, r)
+	}
+	for len(w) > 0 {
+		n := min(len(w), len(s.rx))
+		if err := s.bus.Tx(w[:n], s.rx[:n]); err != nil {
+			return err
+		}
+		w = w[n:]
+	}
+	return nil
 }
 
 // NewPico2PicoToPiHardware creates and configures hardware for Pico 2 W
