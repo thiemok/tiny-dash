@@ -1,3 +1,14 @@
+## 0.2.4 (2026-10-17)
+
+### 🩹 Fixes
+
+- **firmware:** make inky/picoDevice test targets pass ([#11](https://github.com/thiemok/tiny-dash/pull/11))
+
+### ❤️ Thank You
+
+- Claude Opus 5.5
+- Thiemo
+
 ## 0.2.3 (2026-10-17)
 
 This was a version bump only for api to align it with other projects, there were no code changes.
