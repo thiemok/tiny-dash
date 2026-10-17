@@ -1,0 +1,19 @@
+scripts:
+  setup: |
+    set -euo pipefail
+    cd "$ORCA_WORKTREE_PATH"
+
+    # Gitignored local files that a fresh worktree needs from the main checkout:
+    #   go.work                     - Go workspace tying api/inky/picoDevice/util together
+    #   api/config.yaml             - HA/weather config (contains secrets)
+    #   picoDevice/.env             - device config, rendered into generated.go by picoDevice:configure
+    #   .claude/settings.local.json - local Claude Code permissions
+    for f in go.work api/config.yaml picoDevice/.env .claude/settings.local.json; do
+      if [ -f "$ORCA_ROOT_PATH/$f" ] && [ ! -e "$f" ]; then
+        mkdir -p "$(dirname "$f")"
+        cp "$ORCA_ROOT_PATH/$f" "$f"
+        echo "copied $f"
+      fi
+    done
+
+    pnpm install --frozen-lockfile
