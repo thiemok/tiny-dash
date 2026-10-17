@@ -167,6 +167,7 @@ func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr neti
 		RxBuf:             rxBuf,
 		TxBuf:             txBuf,
 		TxPacketQueueSize: 3,
+		RWBackoff:         func(uint) time.Duration { return pollTime },
 	})
 	if err != nil {
 		return fmt.Errorf("conn configure: %w", err)
@@ -189,6 +190,7 @@ func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr neti
 	var respHdr httpraw.HeaderV1
 	respHdr.Reset(nil, 0)
 	headerDeadline := time.Now().Add(10 * time.Second)
+	conn.SetReadDeadline(headerDeadline)
 	headerParsed := false
 
 	for time.Now().Before(headerDeadline) {
@@ -234,6 +236,7 @@ func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr neti
 	}
 
 	bodyDeadline := time.Now().Add(30 * time.Second)
+	conn.SetReadDeadline(bodyDeadline)
 	for bodyReceived < expectedSize && time.Now().Before(bodyDeadline) {
 		n, _ := conn.Read(framebuf[bodyReceived:])
 		if n > 0 {
