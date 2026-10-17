@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"log/slog"
 	"machine"
@@ -38,7 +37,7 @@ func main() {
 	// DHCP
 	dhcpResults, err := stack.SetupWithDHCP(cywnet.DHCPConfig{})
 	util.RequireNoError(err, "DHCP failed")
-	logger.Info("✓ DHCP complete", "ip", dhcpResults.AssignedAddr.String())
+	logger.Info("✓ DHCP complete", "ip", netip.AddrFrom4(dhcpResults.AssignedAddr4).String())
 
 	svAddr := parseServerAddr()
 	reqBytes := buildHTTPRequest(requestURI, svAddr)
@@ -51,7 +50,7 @@ func main() {
 	txBuf := make([]byte, tcpbufsize)
 
 	lstack := stack.LnetoStack()
-	rstack := lstack.StackRetrying(pollTime)
+	rstack := lstack.StackRetrying(func(uint) time.Duration { return pollTime })
 	refreshDuration := time.Duration(config.RefreshInterval) * time.Second
 
 	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "expectedBytes", expectedSize)
@@ -126,8 +125,8 @@ func initWifiStack(logger *slog.Logger) *cywnet.Stack {
 	devcfg := cyw43439.DefaultWifiConfig()
 	devcfg.Logger = logger
 	stack, err := cywnet.NewConfiguredPicoWithStack(config.WifiSSID, config.WifiPassword, devcfg, cywnet.StackConfig{
-		Hostname:    "tiny-dash-pico",
-		MaxTCPPorts: 1,
+		Hostname:          "tiny-dash-pico",
+		MaxActiveTCPPorts: 1,
 	})
 	util.RequireNoError(err, "Wifi initialization failed")
 	logger.Info("✓ WiFi hardware initialized")
@@ -151,9 +150,9 @@ func parseServerAddr() netip.AddrPort {
 }
 
 func buildHTTPRequest(requestURI string, svAddr netip.AddrPort) []byte {
-	var reqHdr httpraw.Header
+	var reqHdr httpraw.HeaderV1
 	reqHdr.SetMethod("GET")
-	reqHdr.SetRequestURI(requestURI)
+	reqHdr.SetRequestTarget(requestURI)
 	reqHdr.SetProtocol("HTTP/1.1")
 	reqHdr.Set("Host", svAddr.Addr().String())
 	reqHdr.Set("Connection", "close")
@@ -187,26 +186,15 @@ func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr neti
 	}
 
 	// Parse response headers
-	var respHdr httpraw.Header
-	respHdr.Reset(nil)
+	var respHdr httpraw.HeaderV1
+	respHdr.Reset(nil, 0)
 	headerDeadline := time.Now().Add(10 * time.Second)
 	headerParsed := false
-	firstRead := true
 
 	for time.Now().Before(headerDeadline) {
 		n, _ := conn.Read(headerBuf)
 		if n > 0 {
-			data := headerBuf[:n]
-			if firstRead {
-				// Strip "HTTP/x.x " protocol prefix — the lneto httpraw parser
-				// expects response lines as "STATUS_CODE STATUS_TEXT", not
-				// "HTTP/1.1 STATUS_CODE STATUS_TEXT".
-				if spIdx := bytes.IndexByte(data, ' '); spIdx > 0 {
-					data = data[spIdx+1:]
-				}
-				firstRead = false
-			}
-			respHdr.ReadFromBytes(data)
+			respHdr.ReadFromBytes(headerBuf[:n])
 			needMore, parseErr := respHdr.TryParse(true)
 			if parseErr != nil && !needMore {
 				closeConn(&conn)

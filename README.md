@@ -136,7 +136,7 @@ The API returns raw packed pixel data that matches the e-ink display's framebuff
 
 ### Prerequisites
 
-- **For picoDevice**: TinyGo 0.30+
+- **For picoDevice**: TinyGo 0.43+
 - **For API**: Go 1.21+
 - **Build Tools**: Nx (for workspace management)
 

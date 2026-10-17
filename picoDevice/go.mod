@@ -1,19 +1,18 @@
 module github.com/thiemok/tiny-dash/picoDevice
 
-go 1.25
+go 1.25.0
 
 require (
-	// TODO point back at main
-	github.com/soypat/cyw43439 v0.0.0-20260314175645-ccad307079a3
-	github.com/soypat/lneto v0.0.0-20260305203516-270b8df043e5
+	github.com/soypat/cyw43439 v0.1.2-0.20261015151841-318d5aff4d24
+	github.com/soypat/lneto v0.3.2
 	github.com/thiemok/tiny-dash/inky v0.0.0
 	github.com/thiemok/tiny-dash/util v0.0.0
 )
 
 require (
 	github.com/soypat/seqs v0.0.0-20260125140838-2c1c6b1bd69e // indirect
-	github.com/tinygo-org/pio v0.2.0 // indirect
-	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
+	github.com/tinygo-org/pio v0.3.0 // indirect
+	golang.org/x/exp v0.0.0-20260820122028-d6e0b57b1a69 // indirect
 )
 
 replace github.com/thiemok/tiny-dash/inky => ../inky
