@@ -8,8 +8,10 @@
 // The parser deliberately avoids net/url: since Go 1.26 url.Parse consults
 // the urlstrictcolons GODEBUG, which links internal/godebug and its settings
 // table into TinyGo binaries (about 1.8 KB of RAM and 7 KB of flash on the
-// RP2350). It accepts the same URLs as url.Parse with Go 1.26's strict-colon
-// rule for http/https hosts.
+// RP2350). Every URL it accepts is parsed exactly as url.Parse with Go 1.26's
+// strict-colon rule would; it additionally rejects percent-escapes in host
+// names and IPv6 zones, and host bytes outside RFC 3986. FuzzParseMatchesNetURL
+// checks both.
 package apiurl
 
 import (
@@ -132,8 +134,9 @@ func Parse(s string) (URL, error) {
 }
 
 // splitHostPort splits an authority into host and port. A present but empty
-// port (trailing ':') is an error. Bracketed hosts must be IPv6 literals; an
-// escaped zone ("%25") is unescaped.
+// port (trailing ':') is an error. Bracketed hosts must be IPv6 literals; a
+// zone must be introduced by "%25" and is limited to unreserved characters,
+// a subset of what url.Parse accepts that keeps it safe in a Host header.
 func splitHostPort(authority string) (host, port string, err error) {
 	hostPort := ""
 	if strings.HasPrefix(authority, "[") {
@@ -141,11 +144,18 @@ func splitHostPort(authority string) (host, port string, err error) {
 		if end < 0 {
 			return "", "", ErrInvalidHost
 		}
-		host, hostPort = strings.Replace(authority[1:end], "%25", "%", 1), authority[end+1:]
+		host, hostPort = authority[1:end], authority[end+1:]
 		if hostPort != "" && hostPort[0] != ':' {
 			return "", "", ErrInvalidHost
 		}
-		if addr, err := netip.ParseAddr(host); err != nil || addr.Is4() {
+		addr, zone, hasZone := strings.Cut(host, "%25")
+		if strings.IndexByte(addr, '%') >= 0 || hasZone && !isUnreservedString(zone) {
+			return "", "", ErrInvalidHost
+		}
+		if hasZone {
+			host = addr + "%" + zone
+		}
+		if ip, err := netip.ParseAddr(host); err != nil || ip.Is4() {
 			return "", "", ErrInvalidHost
 		}
 	} else {
@@ -178,34 +188,48 @@ func validHostByte(c byte) bool {
 	return c >= 0x80 || isUnreserved(c) || strings.IndexByte("!$&'()*+,;=", c) >= 0
 }
 
+func isUnreservedString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isUnreserved(s[i]) {
+			return false
+		}
+	}
+	return s != ""
+}
+
 func isUnreserved(c byte) bool {
 	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' ||
 		c == '-' || c == '.' || c == '_' || c == '~'
 }
 
-// escapePath keeps valid percent-escapes and the characters url.URL.EscapedPath
-// leaves alone, and percent-encodes everything else.
+// escapePath returns p as url.URL.EscapedPath does: unchanged when it is
+// validly encoded, otherwise fully unescaped and re-escaped, which also
+// decodes escapes of characters that need none (e.g. "%41" becomes "A").
 func escapePath(p string) (string, error) {
 	const hex = "0123456789ABCDEF"
-	n := 0
+	valid := true
 	for i := 0; i < len(p); i++ {
-		c := p[i]
-		switch {
+		switch c := p[i]; {
 		case c == '%':
 			if i+2 >= len(p) || !isHex(p[i+1]) || !isHex(p[i+2]) {
 				return "", ErrInvalidPath
 			}
 			i += 2
 		case !validPathByte(c):
-			n++
+			valid = false
 		}
 	}
-	if n == 0 {
+	if valid {
 		return p, nil
 	}
-	b := make([]byte, 0, len(p)+2*n)
+	b := make([]byte, 0, 3*len(p))
 	for i := 0; i < len(p); i++ {
-		if c := p[i]; c == '%' || validPathByte(c) {
+		c := p[i]
+		if c == '%' {
+			c = unhex(p[i+1])<<4 | unhex(p[i+2])
+			i += 2
+		}
+		if keepPathByte(c) {
 			b = append(b, c)
 		} else {
 			b = append(b, '%', hex[c>>4], hex[c&0xf])
@@ -214,8 +238,24 @@ func escapePath(p string) (string, error) {
 	return string(b), nil
 }
 
+// validPathByte reports whether c may appear unescaped in an encoded path.
 func validPathByte(c byte) bool {
 	return c < 0x80 && (isUnreserved(c) || strings.IndexByte("/!$&'()*+,;=:@[]", c) >= 0)
+}
+
+// keepPathByte reports whether c is left unescaped when encoding a path.
+func keepPathByte(c byte) bool {
+	return c < 0x80 && (isUnreserved(c) || strings.IndexByte("/$&+,;=:@", c) >= 0)
+}
+
+func unhex(c byte) byte {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0'
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10
+	}
+	return c - 'A' + 10
 }
 
 func isHex(c byte) bool {
