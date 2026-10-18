@@ -81,6 +81,13 @@ func main() {
 	defer flushLogOnPanic(logger, logDrainer)
 	time.Sleep(5 * time.Second)
 	logger.Info("tiny-dash picoDevice Starting...")
+	crcFreed, err := releaseCRC32Table()
+	util.RequireNoError(err, "releasing the crc32 table")
+	if debugBuild {
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "✓ crc32 slicing table released", slog.Uint64("freedBytes", crcFreed))
+	} else {
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "✓ crc32 slicing table released")
+	}
 
 	apiURL, svAddr := parseAPIURL(logger)
 	display, requestURI := initDisplay(logger, apiURL)
