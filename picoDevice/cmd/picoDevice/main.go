@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"machine"
 	"net/netip"
+	"os"
 	"runtime"
 	"strconv"
 	"time"
@@ -20,19 +21,37 @@ import (
 	"github.com/thiemok/tiny-dash/inky/pkg/inky/common"
 	"github.com/thiemok/tiny-dash/logkit"
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
+	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
 	util "github.com/thiemok/tiny-dash/util/pkg"
 	"github.com/thiemok/tiny-dash/util/pkg/logfmt"
 )
 
 const connTimeout = 5 * time.Second
-const tcpbufsize = 2030 // MTU - ethhdr - iphdr - tcphdr
+
+// rxBufSize is the TCP receive window. Linux caps its MSS at half the largest
+// window seen, so a 2030 B window was filled exactly by two 1015 B segments
+// and advertised as zero about 95 times per image. lneto v0.3.2 takes Linux's
+// zero-window probe for a keepalive and does not answer it, so whenever the
+// window update that followed got lost the transfer hung (THI-41). At 4096 B
+// the MSS is 1460 and two full segments leave 1176 B open: the window only
+// closes if Read falls behind, and a lost update to a non-zero window is
+// recovered by Linux's persist timer sending real data, which lneto ACKs.
+const rxBufSize = 4096
 const pollTime = 5 * time.Millisecond
 
 // maxFetchFailures consecutive network failures trigger a reconnect even
 // while the chip reports the link up, e.g. when the DHCP lease or the route
 // to the server is gone.
 const maxFetchFailures = 3
+
+// A body read that makes no progress for bodyStallTimeout is abandoned and
+// the fetch retried up to maxBodyRetries times; a healthy transfer never
+// pauses for more than a few hundred milliseconds.
+const (
+	bodyStallTimeout = 5 * time.Second
+	maxBodyRetries   = 2
+)
 
 // logBuf bounds log memory; records that arrive while it is full are dropped
 // rather than blocking the caller. At Info level the fill peaks at ~350 B
@@ -53,6 +72,7 @@ var (
 	errRedirect        = errors.New("unexpected redirect")
 	errHTTPStatus      = errors.New("unexpected HTTP status")
 	errIncompleteImage = errors.New("incomplete image data")
+	errBodyStall       = errors.New("image body stalled")
 )
 
 func main() {
@@ -79,11 +99,12 @@ func main() {
 		addr:   svAddr,
 		req:    req,
 		hdrBuf: make([]byte, 0, headerBufSize),
-		rxBuf:  make([]byte, tcpbufsize),
+		rxBuf:  make([]byte, rxBufSize),
 		// The request is the only data ever sent.
-		txBuf:    make([]byte, len(req)),
-		framebuf: display.Buffer(),
-		logger:   logger,
+		txBuf:        make([]byte, len(req)),
+		framebuf:     display.Buffer(),
+		logger:       logger,
+		retryBackoff: backoff.Exponential{Min: 500 * time.Millisecond, Max: 2 * time.Second},
 	}
 	f.hdr.ConfigBufferGrowth(false)
 	f.hdr.Reset(f.hdrBuf, maxHeaderPairs)
@@ -114,7 +135,7 @@ func main() {
 			}
 		}
 
-		stage, err := f.fetch()
+		stage, err := f.fetchRetrying()
 		switch {
 		case err == nil:
 			fetchFailures = 0
@@ -274,6 +295,25 @@ type fetcher struct {
 	txBuf    []byte
 	framebuf []byte
 	logger   *slog.Logger
+
+	retryBackoff backoff.Exponential
+}
+
+// fetchRetrying retries a fetch whose body stalled or ended early. framebuf is
+// only shown after a complete fetch, so the display keeps the last image
+// while retries overwrite the buffer.
+func (f *fetcher) fetchRetrying() (stage string, err error) {
+	f.retryBackoff.Reset()
+	for retry := 0; ; retry++ {
+		stage, err = f.fetch()
+		if retry == maxBodyRetries || (err != errBodyStall && err != errIncompleteImage) {
+			return stage, err
+		}
+		wait := f.retryBackoff.Next(rand32())
+		f.logger.LogAttrs(context.Background(), slog.LevelWarn, "retrying image fetch",
+			slog.Any("error", err), slog.Int("retry", retry+1), slog.Duration("retryIn", wait))
+		time.Sleep(wait)
+	}
 }
 
 // fetch streams the image into framebuf. On failure it returns the failing
@@ -369,34 +409,51 @@ func (f *fetcher) fetch() (stage string, err error) {
 	}
 	bodyReceived := copy(f.framebuf, initialBody)
 
-	bodyDeadline := time.Now().Add(30 * time.Second)
-	conn.SetReadDeadline(bodyDeadline)
-	for bodyReceived < len(f.framebuf) && time.Now().Before(bodyDeadline) {
-		n, _ := conn.Read(f.framebuf[bodyReceived:])
-		if n > 0 {
-			bodyReceived += n
-		} else {
-			time.Sleep(pollTime)
-		}
+	bodyStart := time.Now()
+	bodyDeadline := bodyStart.Add(30 * time.Second)
+	var readErr error
+	for bodyReceived < len(f.framebuf) && readErr == nil {
+		// Read blocks until data arrives, so its deadline doubles as the stall
+		// timer: every chunk received pushes it back.
+		conn.SetReadDeadline(minTime(time.Now().Add(bodyStallTimeout), bodyDeadline))
+		var n int
+		n, readErr = conn.Read(f.framebuf[bodyReceived:])
+		bodyReceived += n
 	}
 
 	closeConn(conn)
 
 	if bodyReceived != len(f.framebuf) {
-		f.logger.LogAttrs(context.Background(), slog.LevelError, "incomplete image data",
-			slog.Int("received", bodyReceived), slog.Int("expected", len(f.framebuf)))
-		return "body read", errIncompleteImage
+		err = errIncompleteImage
+		if errors.Is(readErr, os.ErrDeadlineExceeded) && time.Now().Before(bodyDeadline) {
+			err = errBodyStall
+		}
+		f.logger.LogAttrs(context.Background(), slog.LevelError, err.Error(),
+			slog.Int("received", bodyReceived), slog.Int("expected", len(f.framebuf)),
+			slog.Duration("after", time.Since(bodyStart)), slog.Any("readError", readErr))
+		return "body read", err
 	}
 
 	return "", nil
 }
 
+// closeConn shuts the read side down before closing so that a server still
+// sending, as after an abandoned body, gets an RST instead of filling a window
+// nobody drains; lneto v0.3.2 has no other way to send one.
 func closeConn(conn *tcp.Conn) {
+	conn.CloseRead()
 	conn.Close()
 	for i := 0; i < 50 && !conn.State().IsClosed(); i++ {
 		time.Sleep(100 * time.Millisecond)
 	}
 	conn.Abort()
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 func hasPrefixFold(b []byte, prefix string) bool {
