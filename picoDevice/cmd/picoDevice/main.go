@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"machine"
 	"net/netip"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/thiemok/tiny-dash/inky/pkg/adapters"
 	"github.com/thiemok/tiny-dash/inky/pkg/inky"
 	"github.com/thiemok/tiny-dash/inky/pkg/inky/common"
+	"github.com/thiemok/tiny-dash/logkit"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
 	util "github.com/thiemok/tiny-dash/util/pkg"
 )
@@ -24,8 +26,12 @@ const connTimeout = 5 * time.Second
 const tcpbufsize = 2030 // MTU - ethhdr - iphdr - tcphdr
 const pollTime = 5 * time.Millisecond
 
+// logBufSize bounds log memory; records that arrive while it is full are
+// dropped rather than blocking the caller.
+const logBufSize = 4096
+
 func main() {
-	logger := initLogger()
+	logger, logRing := initLogger()
 	time.Sleep(5 * time.Second)
 	logger.Info("tiny-dash picoDevice Starting...")
 
@@ -55,7 +61,9 @@ func main() {
 
 	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "expectedBytes", expectedSize)
 
-	for {
+	var memStats runtime.MemStats
+	for cycle := 1; ; cycle++ {
+		cycleStart := time.Now()
 		// Fetch image on a separate goroutine
 		type fetchResult struct{ err error }
 		ch := make(chan fetchResult, 1)
@@ -76,14 +84,38 @@ func main() {
 			}
 		}
 
+		if debugBuild {
+			runtime.ReadMemStats(&memStats)
+			logger.Info("refresh cycle done",
+				"cycle", cycle,
+				"cycleMs", time.Since(cycleStart).Milliseconds(),
+				"logDropped", logRing.Dropped(),
+				"heapInuse", memStats.HeapInuse,
+				"heapSys", memStats.HeapSys,
+			)
+		} else {
+			logger.Info("refresh cycle done",
+				"cycle", cycle,
+				"cycleMs", time.Since(cycleStart).Milliseconds(),
+				"logDropped", logRing.Dropped(),
+			)
+		}
+
 		time.Sleep(refreshDuration)
 	}
 }
 
-func initLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(machine.Serial, &slog.HandlerOptions{
+// initLogger routes logs through a ring buffer drained by its own goroutine:
+// TinyGo's USB-CDC Write spins until the host reads, so writing to
+// machine.Serial directly can stall any goroutine that logs, including the
+// network and display paths.
+func initLogger() (*slog.Logger, *logkit.RingWriter) {
+	ring := logkit.NewRingWriter(make([]byte, logBufSize))
+	drainer := &logkit.Drainer{Src: ring, Dst: machine.Serial, Ready: machine.Serial.DTR}
+	go drainer.Run()
+	return slog.New(slog.NewTextHandler(ring, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
-	}))
+	})), ring
 }
 
 func initDisplay(logger *slog.Logger) (common.Display, string) {
