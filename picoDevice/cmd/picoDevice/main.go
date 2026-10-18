@@ -65,9 +65,10 @@ func main() {
 	apiURL, svAddr := parseAPIURL(logger)
 	display, requestURI := initDisplay(logger, apiURL)
 	logger.Info("Initializing WiFi...")
-	// Info level keeps the driver's rxEvent records, whose status and reason
-	// tell why a join failed or the link dropped.
-	link := newWifiLink(logger, slog.New(logHandler.WithLevel(slog.LevelInfo)))
+	// Warn keeps the driver from allocating on every reconnect: its Info-level
+	// rxEvent records carry eight attrs, beyond slog.Record's inline five.
+	// Raise it to Info to see the event status and reason of a failed join.
+	link := newWifiLink(logger, slog.New(logHandler.WithLevel(slog.LevelWarn)))
 	link.connect()
 
 	lstack := &link.stack

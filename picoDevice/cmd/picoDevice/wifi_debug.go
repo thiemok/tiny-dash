@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"log/slog"
 	_ "unsafe"
 
 	"github.com/soypat/cyw43439"
@@ -17,7 +19,8 @@ func (w *wifiLink) simulateOutage(failJoins int) {
 	w.pause()
 	err := doIoctlSet(w.dev, whd.WLC_DISASSOC, whd.IF_STA, nil)
 	w.resume()
-	w.logger.Warn("test: simulated AP outage", "failJoins", failJoins, "error", err)
+	w.logger.LogAttrs(context.Background(), slog.LevelWarn, "test: simulated AP outage",
+		slog.Int("failJoins", failJoins), slog.Any("error", err))
 }
 
 // doIoctlSet is the driver's internal ioctl call; it exports no way to leave

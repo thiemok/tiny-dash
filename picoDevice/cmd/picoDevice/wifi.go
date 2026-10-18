@@ -49,6 +49,10 @@ type wifiLink struct {
 
 	failJoins int
 	inited    bool
+
+	// ipbuf formats the leased address for the connect log; netip.Addr.String
+	// allocates on every reconnect.
+	ipbuf [len("255.255.255.255")]byte
 }
 
 func newWifiLink(logger *slog.Logger, devLogger *slog.Logger) *wifiLink {
@@ -77,7 +81,13 @@ func (w *wifiLink) connect() {
 	}
 	w.backoff.Reset()
 	for attempt := 1; ; attempt++ {
-		w.logger.LogAttrs(ctx, slog.LevelInfo, "wifi connecting", slog.Int("attempt", attempt))
+		if debugBuild {
+			// A flat goroutine count across reconnects shows pollLoop is reused.
+			w.logger.LogAttrs(ctx, slog.LevelInfo, "wifi connecting",
+				slog.Int("attempt", attempt), slog.Int("goroutines", runtime.NumGoroutine()))
+		} else {
+			w.logger.LogAttrs(ctx, slog.LevelInfo, "wifi connecting", slog.Int("attempt", attempt))
+		}
 		start := time.Now()
 		addr, stage, err := w.tryConnect()
 		if err == nil {
@@ -85,7 +95,7 @@ func (w *wifiLink) connect() {
 				runtime.ReadMemStats(&after)
 				w.logger.LogAttrs(ctx, slog.LevelInfo, "✓ WiFi connected",
 					slog.Int("attempt", attempt),
-					slog.String("ip", addr.String()),
+					slog.String("ip", bytesString(addr.AppendTo(w.ipbuf[:0]))),
 					slog.Duration("took", time.Since(start)),
 					slog.Uint64("mallocs", after.Mallocs-before.Mallocs),
 					slog.Uint64("bytes", after.TotalAlloc-before.TotalAlloc),
@@ -93,7 +103,7 @@ func (w *wifiLink) connect() {
 			} else {
 				w.logger.LogAttrs(ctx, slog.LevelInfo, "✓ WiFi connected",
 					slog.Int("attempt", attempt),
-					slog.String("ip", addr.String()),
+					slog.String("ip", bytesString(addr.AppendTo(w.ipbuf[:0]))),
 					slog.Duration("took", time.Since(start)),
 				)
 			}
@@ -131,7 +141,8 @@ func (w *wifiLink) tryConnect() (addr netip.Addr, stage string, err error) {
 		if debugBuild && w.failJoins > 0 {
 			w.failJoins--
 			ssid = testMissingSSID
-			w.logger.Warn("test: joining missing SSID to force a join failure", "ssid", ssid, "remaining", w.failJoins)
+			w.logger.LogAttrs(context.Background(), slog.LevelWarn, "test: joining missing SSID to force a join failure",
+				slog.String("ssid", ssid), slog.Int("remaining", w.failJoins))
 		}
 		if err = w.dev.Join(ssid, cyw43439.JoinOptions{Passphrase: config.WifiPassword}); err != nil {
 			return addr, "join", err

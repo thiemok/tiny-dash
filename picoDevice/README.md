@@ -185,8 +185,10 @@ ignore them. They default to 0 (disabled).
   K the chip joins the missing SSID, which makes it leave the access point like an outage,
   and the next M joins fail the same way.
 
-The cyw43439 driver logs at Info, so each join records `rxEvent` lines whose `status` and
-`reason` say why it failed (status 3 = no network found, 1 = failure).
+The cyw43439 driver logs at Warn, because its Info-level `rxEvent` records allocate on
+every join. To see why a join failed, raise the driver logger in `main.go` to Info: each
+join then records `rxEvent` lines whose `status` and `reason` say why (status 3 = no
+network found, 1 = failure).
 
 ## Development
 
