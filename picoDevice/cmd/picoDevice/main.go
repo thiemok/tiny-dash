@@ -56,10 +56,10 @@ const (
 	maxFetchRetries  = 2
 )
 
-// lneto's StackAsync does not report a record's TTL, so a resolved API host
-// is trusted for dnsMaxAge, until maxDialFailures consecutive dials fail, or
-// until the next WiFi reconnect. maxDialFailures stays below
-// maxFetchFailures so a moved server is looked up before the link is reset.
+// A resolved API host is trusted for dnsMaxAge, whatever its record's TTL,
+// until maxDialFailures consecutive dials fail, or until the next WiFi
+// reconnect. maxDialFailures stays below maxFetchFailures so a moved server
+// is looked up before the link is reset.
 const (
 	dnsMaxAge       = time.Hour
 	maxDialFailures = 2
@@ -87,7 +87,6 @@ var (
 	errHTTPStatus      = errors.New("unexpected HTTP status")
 	errIncompleteImage = errors.New("incomplete image data")
 	errBodyStall       = errors.New("image body stalled")
-	errNoIPv4          = errors.New("no IPv4 address in DNS answer")
 )
 
 func main() {
@@ -115,12 +114,11 @@ func main() {
 	link.connect()
 
 	lstack := &link.stack
-	rstack := lstack.StackRetrying(pollBackoff)
 	req := buildHTTPRequest(requestURI, apiURL)
 	f := &fetcher{
 		lstack:   lstack,
-		rstack:   rstack,
-		resolver: newResolver(apiURL, rstack),
+		rstack:   lstack.StackRetrying(pollBackoff),
+		resolver: newResolver(logger, apiURL, link),
 		port:     apiURL.Port,
 		req:      req,
 		hdrBuf:   make([]byte, 0, headerBufSize),
@@ -309,23 +307,16 @@ func parseDNSServer(logger *slog.Logger) netip.Addr {
 
 // newResolver skips DNS for IP literals so local dev sessions work without a
 // DNS server.
-func newResolver(apiURL apiurl.URL, rstack xnet.StackRetrying) *resolve.Resolver {
+func newResolver(logger *slog.Logger, apiURL apiurl.URL, link *wifiLink) *resolve.Resolver {
 	if apiURL.IsIPLiteral() {
 		return resolve.Static(apiURL.Addr)
 	}
-	lookup := func(host string) (netip.Addr, time.Duration, error) {
-		addrs, err := rstack.DoLookupIP(host, dnsTimeout, dnsRetries)
-		if err != nil {
-			return netip.Addr{}, 0, err
-		}
-		for _, addr := range addrs {
-			if addr.Is4() {
-				return addr, 0, nil
-			}
-		}
-		return netip.Addr{}, 0, errNoIPv4
+	d, err := newDNSLookup(apiURL.Host, link)
+	if err != nil {
+		logger.Error("invalid API_URL host", "host", apiURL.Host, "error", err)
 	}
-	return resolve.New(apiURL.Host, lookup, resolve.Policy{MaxTTL: dnsMaxAge, MaxDialFailures: maxDialFailures})
+	util.RequireNoError(err, "invalid API_URL host "+apiURL.Host)
+	return resolve.New(apiURL.Host, d.lookup, resolve.Policy{MaxTTL: dnsMaxAge, MaxDialFailures: maxDialFailures})
 }
 
 func buildHTTPRequest(requestURI string, apiURL apiurl.URL) []byte {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
 	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
+	"github.com/thiemok/tiny-dash/netkit/pkg/dnsquery"
 	"github.com/thiemok/tiny-dash/netkit/pkg/resolve"
 )
 
@@ -24,4 +25,11 @@ func main() {
 	}, resolve.Policy{MaxTTL: time.Hour, MaxDialFailures: 2})
 	addr, _, _ := r.Resolve(time.Now())
 	println(addr.String())
+	q, err := dnsquery.NewA("api.example.net", 2, 512)
+	if err != nil {
+		panic(err)
+	}
+	req, _ := q.AppendRequest(nil, 1)
+	_, _, err = q.ParseResponse(req, 1)
+	println(len(req), err.Error())
 }

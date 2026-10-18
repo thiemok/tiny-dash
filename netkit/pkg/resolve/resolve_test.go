@@ -175,3 +175,32 @@ func TestCachedResolveDoesNotAllocate(t *testing.T) {
 		t.Errorf("cached Resolve allocated %v times per run", allocs)
 	}
 }
+
+func TestPolicyDecisionsDoNotAllocate(t *testing.T) {
+	dns := &fakeDNS{addr: addrA, ttl: time.Minute}
+	r := New("h", dns.lookup, Policy{MinTTL: time.Second, MaxTTL: time.Hour, MaxDialFailures: 2})
+	static := Static(addrA)
+	now := time.Unix(1000, 0)
+	allocs := testing.AllocsPerRun(100, func() {
+		// Expiry, failed dials and Invalidate each force a lookup.
+		now = now.Add(time.Minute)
+		r.Resolve(now)
+		r.DialFailed()
+		r.DialFailed()
+		r.Resolve(now)
+		r.Invalidate()
+		r.Resolve(now)
+		r.Expires()
+
+		static.Resolve(now)
+		static.DialFailed()
+		static.Invalidate()
+	})
+	if allocs != 0 {
+		t.Errorf("policy decisions allocated %v times per run", allocs)
+	}
+	// AllocsPerRun adds a warm-up run.
+	if want := 3 * 101; dns.queries != want {
+		t.Errorf("queries = %d, want %d", dns.queries, want)
+	}
+}
