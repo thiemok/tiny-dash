@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"machine"
@@ -31,12 +32,13 @@ const pollTime = 5 * time.Millisecond
 const logBufSize = 4096
 
 func main() {
-	logger, logRing := initLogger()
+	logRing := initLogRing()
+	logger := newLogger(logRing, slog.LevelInfo)
 	time.Sleep(5 * time.Second)
 	logger.Info("tiny-dash picoDevice Starting...")
 
 	display, requestURI := initDisplay(logger)
-	stack := initWifiStack(logger)
+	stack := initWifiStack(logger, newLogger(logRing, slog.LevelWarn))
 
 	go loopForeverStack(stack)
 
@@ -61,7 +63,15 @@ func main() {
 
 	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "expectedBytes", expectedSize)
 
-	var memStats runtime.MemStats
+	ctx := context.Background()
+	var memStats, prevMemStats runtime.MemStats
+	if debugBuild {
+		runtime.ReadMemStats(&prevMemStats)
+		logger.LogAttrs(ctx, slog.LevelInfo, "heap",
+			slog.Uint64("heapSys", prevMemStats.HeapSys),
+			slog.Uint64("heapAlloc", prevMemStats.HeapAlloc),
+		)
+	}
 	for cycle := 1; ; cycle++ {
 		cycleStart := time.Now()
 		// Fetch image on a separate goroutine
@@ -85,19 +95,23 @@ func main() {
 		}
 
 		if debugBuild {
+			// mallocs and allocBytes cover everything since the previous report,
+			// including that report's own log line and the sleep in between.
+			// LogAttrs with at most five Attrs keeps the record inline, so this
+			// line adds no allocations of its own beyond the handler's.
 			runtime.ReadMemStats(&memStats)
-			logger.Info("refresh cycle done",
-				"cycle", cycle,
-				"cycleMs", time.Since(cycleStart).Milliseconds(),
-				"logDropped", logRing.Dropped(),
-				"heapInuse", memStats.HeapInuse,
-				"heapSys", memStats.HeapSys,
+			logger.LogAttrs(ctx, slog.LevelInfo, "refresh cycle done",
+				slog.Int("cycle", cycle),
+				slog.Int64("cycleMs", time.Since(cycleStart).Milliseconds()),
+				slog.Uint64("mallocs", memStats.Mallocs-prevMemStats.Mallocs),
+				slog.Uint64("allocBytes", memStats.TotalAlloc-prevMemStats.TotalAlloc),
+				slog.Uint64("heapAlloc", memStats.HeapAlloc),
 			)
+			prevMemStats = memStats
 		} else {
-			logger.Info("refresh cycle done",
-				"cycle", cycle,
-				"cycleMs", time.Since(cycleStart).Milliseconds(),
-				"logDropped", logRing.Dropped(),
+			logger.LogAttrs(ctx, slog.LevelInfo, "refresh cycle done",
+				slog.Int("cycle", cycle),
+				slog.Int64("cycleMs", time.Since(cycleStart).Milliseconds()),
 			)
 		}
 
@@ -105,18 +119,22 @@ func main() {
 	}
 }
 
-// initLogger routes logs through a ring buffer drained by its own goroutine:
+// initLogRing returns a ring buffer drained to serial by its own goroutine:
 // TinyGo's USB-CDC Write spins until the host reads, so writing to
 // machine.Serial directly can stall any goroutine that logs, including the
-// network and display paths.
-func initLogger() (*slog.Logger, *logkit.RingWriter) {
+// network and display paths. Dropped bytes are reported by the drainer itself.
+func initLogRing() *logkit.RingWriter {
 	ring := logkit.NewRingWriter(make([]byte, logBufSize))
 	drainer := &logkit.Drainer{Src: ring, Dst: machine.Serial, Ready: machine.Serial.DTR}
 	go drainer.Run()
 	go keepUSBHostAwake()
-	return slog.New(slog.NewTextHandler(ring, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	})), ring
+	return ring
+}
+
+// newLogger writes to ring. Every record costs heap allocations in the
+// TextHandler, so the WiFi driver gets its own, quieter logger.
+func newLogger(ring *logkit.RingWriter, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewTextHandler(ring, &slog.HandlerOptions{Level: level}))
 }
 
 func initDisplay(logger *slog.Logger) (common.Display, string) {
@@ -153,10 +171,10 @@ func initDisplay(logger *slog.Logger) (common.Display, string) {
 	return display, requestURI
 }
 
-func initWifiStack(logger *slog.Logger) *cywnet.Stack {
+func initWifiStack(logger, driverLogger *slog.Logger) *cywnet.Stack {
 	logger.Info("Initializing WiFi...")
 	devcfg := cyw43439.DefaultWifiConfig()
-	devcfg.Logger = logger
+	devcfg.Logger = driverLogger
 	stack, err := cywnet.NewConfiguredPicoWithStack(config.WifiSSID, config.WifiPassword, devcfg, cywnet.StackConfig{
 		Hostname:          "tiny-dash-pico",
 		MaxActiveTCPPorts: 1,

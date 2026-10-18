@@ -99,6 +99,28 @@ func TestDrainerStepDoesNotAllocate(t *testing.T) {
 	}
 }
 
+func TestDrainerDropMarkerAndNotReadyDoNotAllocate(t *testing.T) {
+	src := NewRingWriter(make([]byte, 16))
+	ready := true
+	d := Drainer{Src: src, Dst: discardWriter{}, Ready: func() bool { return ready }}
+	oversized := []byte("level=INFO msg=does-not-fit\n")
+	allocs := testing.AllocsPerRun(1000, func() {
+		src.Write(oversized)
+		runUntilIdle(&d)
+		ready = false
+		src.Write(oversized[:8])
+		d.Step()
+		ready = true
+	})
+	if allocs != 0 {
+		t.Fatalf("allocs per drop cycle = %v", allocs)
+	}
+	runUntilIdle(&d)
+	if d.reported != src.Dropped() {
+		t.Fatalf("reported = %d, dropped = %d", d.reported, src.Dropped())
+	}
+}
+
 type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
