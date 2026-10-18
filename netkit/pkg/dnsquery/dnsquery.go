@@ -44,7 +44,23 @@ func NewA(host string, maxAnswers int, udpSize uint16) (*Query, error) {
 		q.req.AddAdditionals([]dns.Resource{opt})
 	}
 	q.resp.LimitResourceDecoding(1, uint16(maxAnswers), 0, 0)
+	q.growResponse()
 	return q, nil
+}
+
+// growResponse sizes the decode buffers for maxAnswers A records about the
+// host, so that the first response does not allocate either. Decode keeps
+// the buffers when it resets the records.
+func (q *Query) growResponse() {
+	var a [4]byte
+	r := &q.resp
+	r.Questions = r.Questions[:1]
+	r.Questions[0].Name.CopyFrom(q.name)
+	r.Answers = r.Answers[:cap(r.Answers)]
+	for i := range r.Answers {
+		r.Answers[i].SetA(q.name, dns.ClassINET, 0, a[:])
+	}
+	r.Reset()
 }
 
 // Host returns the host name the Query asks for.

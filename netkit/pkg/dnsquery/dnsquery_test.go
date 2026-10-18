@@ -208,3 +208,23 @@ func TestRepeatedLookupsDoNotAllocate(t *testing.T) {
 		t.Errorf("lookup allocated %v times per run", allocs)
 	}
 }
+
+func TestFirstResponseDoesNotAllocate(t *testing.T) {
+	const runs = 10
+	resp := response(t, 7, flagsOK, aRecord(t, host, addr, 60), aRecord(t, host, addr, 60))
+	// AllocsPerRun calls f once more as warm-up; each call gets a fresh Query.
+	queries := make([]*Query, runs+1)
+	for i := range queries {
+		queries[i] = newQuery(t)
+	}
+	i := 0
+	allocs := testing.AllocsPerRun(runs, func() {
+		if _, _, err := queries[i].ParseResponse(resp, 7); err != nil {
+			t.Fatal(err)
+		}
+		i++
+	})
+	if allocs != 0 {
+		t.Errorf("first response allocated %v times per Query", allocs)
+	}
+}

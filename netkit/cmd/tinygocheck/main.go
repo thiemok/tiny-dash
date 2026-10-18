@@ -8,6 +8,7 @@ import (
 
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
 	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
+	"github.com/thiemok/tiny-dash/netkit/pkg/bufshare"
 	"github.com/thiemok/tiny-dash/netkit/pkg/dnsquery"
 	"github.com/thiemok/tiny-dash/netkit/pkg/resolve"
 )
@@ -32,4 +33,6 @@ func main() {
 	req, _ := q.AppendRequest(nil, 1)
 	_, _, err = q.ParseResponse(req, 1)
 	println(len(req), err.Error())
+	sb := bufshare.New(make([]byte, 8))
+	println(sb.Acquire(&bufshare.User{Name: "a", Idle: func() bool { return true }}) == nil)
 }

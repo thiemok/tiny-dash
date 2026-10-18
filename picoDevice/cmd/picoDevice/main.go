@@ -22,6 +22,7 @@ import (
 	"github.com/thiemok/tiny-dash/logkit"
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
 	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
+	"github.com/thiemok/tiny-dash/netkit/pkg/bufshare"
 	"github.com/thiemok/tiny-dash/netkit/pkg/resolve"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
 	util "github.com/thiemok/tiny-dash/util/pkg"
@@ -115,20 +116,22 @@ func main() {
 
 	lstack := &link.stack
 	req := buildHTTPRequest(requestURI, apiURL)
+	rxShare := bufshare.New(make([]byte, rxBufSize))
 	f := &fetcher{
 		lstack:   lstack,
 		rstack:   lstack.StackRetrying(pollBackoff),
-		resolver: newResolver(logger, apiURL, link),
+		resolver: newResolver(logger, apiURL, link, rxShare),
 		port:     apiURL.Port,
 		req:      req,
 		hdrBuf:   make([]byte, 0, headerBufSize),
-		rxBuf:    make([]byte, rxBufSize),
+		rxShare:  rxShare,
 		// The request is the only data ever sent.
 		txBuf:        make([]byte, len(req)),
 		framebuf:     display.Buffer(),
 		logger:       logger,
 		retryBackoff: backoff.Exponential{Min: 500 * time.Millisecond, Max: 2 * time.Second},
 	}
+	f.rxUser = bufshare.User{Name: "fetch conn", Idle: f.connIdle}
 	f.hdr.ConfigBufferGrowth(false)
 	f.hdr.Reset(f.hdrBuf, maxHeaderPairs)
 	refreshDuration := time.Duration(config.RefreshInterval) * time.Second
@@ -307,11 +310,17 @@ func parseDNSServer(logger *slog.Logger) netip.Addr {
 
 // newResolver skips DNS for IP literals so local dev sessions work without a
 // DNS server.
-func newResolver(logger *slog.Logger, apiURL apiurl.URL, link *wifiLink) *resolve.Resolver {
+//
+// DNS lookups share rxShare, the fetch conn's receive buffer, saving ~1.1 KB:
+// fetch resolves the host before it opens that conn, and aborts the conn on
+// every return, so after Abort lneto no longer writes into the buffer (see
+// fetcher.connIdle). Each conn acquires the buffer before configuring it, and
+// that fails rather than overlap while the other conn is still open.
+func newResolver(logger *slog.Logger, apiURL apiurl.URL, link *wifiLink, rxShare *bufshare.Buffer) *resolve.Resolver {
 	if apiURL.IsIPLiteral() {
 		return resolve.Static(apiURL.Addr)
 	}
-	d, err := newDNSLookup(apiURL.Host, link)
+	d, err := newDNSLookup(apiURL.Host, link, rxShare)
 	if err != nil {
 		logger.Error("invalid API_URL host", "host", apiURL.Host, "error", err)
 	}
@@ -342,7 +351,9 @@ type fetcher struct {
 	conn     tcp.Conn
 	hdr      httpraw.HeaderV1
 	hdrBuf   []byte
-	rxBuf    []byte
+	// rxShare is the conn's receive buffer, shared with DNS lookups.
+	rxShare  *bufshare.Buffer
+	rxUser   bufshare.User
 	txBuf    []byte
 	framebuf []byte
 	logger   *slog.Logger
@@ -391,9 +402,12 @@ func (f *fetcher) fetch() (stage string, err error) {
 		return "dns lookup", err
 	}
 
+	if err = f.rxShare.Acquire(&f.rxUser); err != nil {
+		return "conn configure", err
+	}
 	conn := &f.conn
 	err = conn.Configure(tcp.ConnConfig{
-		RxBuf:             f.rxBuf,
+		RxBuf:             f.rxShare.Bytes(),
 		TxBuf:             f.txBuf,
 		TxPacketQueueSize: 3,
 		RWBackoff:         pollBackoff,
@@ -512,6 +526,11 @@ func (f *fetcher) fetch() (stage string, err error) {
 
 	return "", nil
 }
+
+// connIdle reports whether the conn is aborted: Abort zeroes the local port,
+// so the conn rejects every segment, and bumps the conn ID, so the stack
+// drops its port registration. fetch aborts the conn on every return.
+func (f *fetcher) connIdle() bool { return f.conn.LocalPort() == 0 }
 
 // resolveServer returns the API server's address, logging every DNS lookup,
 // with its allocations in debug builds. A failed lookup falls back to the
