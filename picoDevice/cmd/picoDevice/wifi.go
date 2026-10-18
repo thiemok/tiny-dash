@@ -49,6 +49,7 @@ type wifiLink struct {
 
 	failJoins int
 	inited    bool
+	icmpReady bool
 
 	// ipbuf formats the leased address for the connect log; netip.Addr.String
 	// allocates on every reconnect.
@@ -152,21 +153,31 @@ func (w *wifiLink) tryConnect() (addr netip.Addr, stage string, err error) {
 	if err != nil {
 		return addr, "mac", err
 	}
-	err = w.stack.Reset(xnet.StackConfig{
+	cfg := xnet.StackConfig{
 		Hostname:          hostname,
 		MaxActiveTCPPorts: 1,
 		RandSeed:          int64(rand32()) | 1,
 		HardwareAddress:   mac,
 		MTU:               1500,
 		PassivePeers:      2,
-		ICMPQueueLimit:    2,
-	})
+	}
+	// Reset allocates a new ICMP echo queue whenever ICMPQueueLimit is set
+	// and leaves the ICMP client alone otherwise, so only the first Reset
+	// sizes it; disabling ICMP clears it of echoes queued before the reset.
+	if !w.icmpReady {
+		cfg.ICMPQueueLimit = 2
+	}
+	err = w.stack.Reset(cfg)
+	if err == nil {
+		err = w.stack.EnableICMP(false)
+	}
 	if err == nil {
 		err = w.stack.EnableICMP(true)
 	}
 	if err != nil {
 		return addr, "stack reset", err
 	}
+	w.icmpReady = true
 	w.resume()
 
 	rstack := w.stack.StackRetrying(stackBackoff)
