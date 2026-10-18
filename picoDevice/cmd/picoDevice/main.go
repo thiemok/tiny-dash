@@ -113,6 +113,7 @@ func initLogger() (*slog.Logger, *logkit.RingWriter) {
 	ring := logkit.NewRingWriter(make([]byte, logBufSize))
 	drainer := &logkit.Drainer{Src: ring, Dst: machine.Serial, Ready: machine.Serial.DTR}
 	go drainer.Run()
+	go keepUSBHostAwake()
 	return slog.New(slog.NewTextHandler(ring, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})), ring
