@@ -21,6 +21,10 @@ echo "Building picoDevice firmware for Raspberry Pi Pico 2 W${PICO_BUILD_TAGS:+ 
 tinygo build "${FLAGS[@]}" -o $OUTPUT_FILE ./cmd/picoDevice
 
 echo "✓ picoDevice firmware built: $OUTPUT_FILE"
+
+# Not flashed by default; built so that it keeps compiling.
+tinygo build -target=$TARGET -scheduler=tasks -o $OUTPUT_DIR/serialstress.uf2 ./tools/serialstress
+echo "✓ serialstress firmware built: $OUTPUT_DIR/serialstress.uf2"
 echo ""
 echo "Configuration:"
 echo "  WiFi SSID: $WIFI_SSID"
