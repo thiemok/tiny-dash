@@ -89,6 +89,13 @@ would otherwise stall every goroutine that logs. Output is discarded while no re
 If records were dropped, a `logkit: dropped=<bytes>` line is printed, and each
 `refresh cycle done` line reports the running total as `logDropped`.
 
+TinyGo advertises USB remote wakeup but never signals it. Linux autosuspends the device after
+2 s without serial traffic, even while a reader has the port open, and output would then stop
+until the port is reopened. `keepUSBHostAwake` (`cmd/picoDevice/usbwake.go`) signals the wakeup
+whenever output is queued while the bus is suspended. Host-side alternative: disable autosuspend
+for the Pico, e.g. with a udev rule
+`ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="000a", TEST=="power/control", ATTR{power/control}="on"`.
+
 For a non-interactive capture:
 
 ```bash

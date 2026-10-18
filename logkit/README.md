@@ -24,6 +24,9 @@ that logs blocks indefinitely. This happens, for example, after a reader closes 
 `-hupcl`, or while a reader is stopped. With `Drainer`, only the drain goroutine blocks. Writers
 keep running, and the ring drops records once it fills.
 
+On the RP2350 a second cause is that the host USB-suspends the idle device, and TinyGo never
+signals remote wakeup. That fix is Pico glue and lives in `picoDevice/cmd/picoDevice/usbwake.go`.
+
 ## Tasks
 
 ```sh
