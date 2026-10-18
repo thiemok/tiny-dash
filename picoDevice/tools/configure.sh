@@ -11,9 +11,18 @@ else
     # Set defaults
     export WIFI_SSID="${WIFI_SSID:-default_ssid}"
     export WIFI_PASSWORD="${WIFI_PASSWORD:-default_password}"
-    export API_HOST="${API_HOST:-192.168.1.100}"
-    export API_PORT="${API_PORT:-8080}"
+    export API_URL="${API_URL:-http://192.168.1.100:8080}"
     export REFRESH_INTERVAL="${REFRESH_INTERVAL:-60}"
+fi
+
+# Legacy .env files configured API_HOST/API_PORT instead of API_URL.
+if [ -z "$API_URL" ] && [ -n "$API_HOST" ]; then
+    export API_URL="http://$API_HOST:${API_PORT:-80}"
+    echo "Warning: API_HOST/API_PORT are deprecated; using API_URL=$API_URL. Replace them with API_URL in .env."
+fi
+if [ -z "$API_URL" ]; then
+    echo "Error: API_URL is not set in .env (e.g. API_URL=http://192.168.1.100:8080)" >&2
+    exit 1
 fi
 
 # Generate config file from environment variables
@@ -29,8 +38,7 @@ package config
 const (
 	WifiSSID        = "$WIFI_SSID"
 	WifiPassword    = "$WIFI_PASSWORD"
-	APIHost         = "$API_HOST"
-	APIPort         = "$API_PORT"
+	APIURL          = "$API_URL"
 	RefreshInterval = $REFRESH_INTERVAL
 )
 EOF

@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"machine"
 	"net/netip"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/soypat/cyw43439"
@@ -19,6 +21,7 @@ import (
 	"github.com/thiemok/tiny-dash/inky/pkg/inky"
 	"github.com/thiemok/tiny-dash/inky/pkg/inky/common"
 	"github.com/thiemok/tiny-dash/logkit"
+	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
 	util "github.com/thiemok/tiny-dash/util/pkg"
 )
@@ -42,7 +45,8 @@ func main() {
 	time.Sleep(5 * time.Second)
 	logger.Info("tiny-dash picoDevice Starting...")
 
-	display, requestURI := initDisplay(logger)
+	apiURL, svAddr := parseAPIURL(logger)
+	display, requestURI := initDisplay(logger, apiURL)
 	stack := initWifiStack(logger, newLogger(logRing, slog.LevelWarn))
 
 	go loopForeverStack(stack)
@@ -52,8 +56,7 @@ func main() {
 	util.RequireNoError(err, "DHCP failed")
 	logger.Info("✓ DHCP complete", "ip", netip.AddrFrom4(dhcpResults.AssignedAddr4).String())
 
-	svAddr := parseServerAddr()
-	reqBytes := buildHTTPRequest(requestURI, svAddr)
+	reqBytes := buildHTTPRequest(requestURI, apiURL)
 
 	// Pre-allocate buffers to avoid per-iteration allocation
 	framebuf := display.Buffer()
@@ -66,7 +69,7 @@ func main() {
 	rstack := lstack.StackRetrying(func(uint) time.Duration { return pollTime })
 	refreshDuration := time.Duration(config.RefreshInterval) * time.Second
 
-	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "expectedBytes", expectedSize)
+	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", expectedSize)
 
 	ctx := context.Background()
 	var memStats, prevMemStats runtime.MemStats
@@ -157,7 +160,7 @@ func newLogger(ring *logkit.RingWriter, level slog.Level) *slog.Logger {
 	return slog.New(slog.NewTextHandler(ring, &slog.HandlerOptions{Level: level}))
 }
 
-func initDisplay(logger *slog.Logger) (common.Display, string) {
+func initDisplay(logger *slog.Logger, apiURL apiurl.URL) (common.Display, string) {
 	logger.Info("Initializing hardware...")
 	hardware, err := adapters.NewPico2PicoToPiHardware()
 	util.RequireNoError(err, "Failed to initialize hardware")
@@ -183,7 +186,7 @@ func initDisplay(logger *slog.Logger) (common.Display, string) {
 		colorsParam += strconv.Itoa(int(c))
 	}
 
-	requestURI := "/api/dashboard/image?width=" + strconv.Itoa(width) +
+	requestURI := apiURL.RequestTarget("/api/dashboard/image") + "?width=" + strconv.Itoa(width) +
 		"&height=" + strconv.Itoa(height) +
 		"&colorDepth=" + strconv.Itoa(colorDepth) +
 		"&colors=" + colorsParam
@@ -213,19 +216,33 @@ func loopForeverStack(stack *cywnet.Stack) {
 	}
 }
 
-func parseServerAddr() netip.AddrPort {
-	serverAddr := config.APIHost + ":" + config.APIPort
-	svAddr, err := netip.ParseAddrPort(serverAddr)
-	util.RequireNoError(err, "parsing server address")
-	return svAddr
+// parseAPIURL fails before WiFi bring-up so a bad API_URL is reported
+// immediately instead of after a DHCP round trip.
+func parseAPIURL(logger *slog.Logger) (apiurl.URL, netip.AddrPort) {
+	apiURL, err := apiurl.Parse(config.APIURL)
+	if err == nil && apiURL.Scheme == apiurl.SchemeHTTPS {
+		// TODO(THI-32): TLS client.
+		err = errors.New("https is not supported yet; use an http:// API_URL")
+	}
+	svAddr, ok := apiURL.AddrPort()
+	if err == nil && !ok {
+		// TODO(THI-29): resolve host names via DNS.
+		err = errors.New("host name " + apiURL.Host + " needs DNS, which is not supported yet; use an IP literal")
+	}
+	if err != nil {
+		logger.Error("invalid API_URL", "url", config.APIURL, "error", err)
+	}
+	util.RequireNoError(err, "invalid API_URL "+config.APIURL)
+	logger.Info("✓ API URL parsed", "url", apiURL.String(), "host", apiURL.HostHeader(), "pathPrefix", apiURL.PathPrefix)
+	return apiURL, svAddr
 }
 
-func buildHTTPRequest(requestURI string, svAddr netip.AddrPort) []byte {
+func buildHTTPRequest(requestURI string, apiURL apiurl.URL) []byte {
 	var reqHdr httpraw.HeaderV1
 	reqHdr.SetMethod("GET")
 	reqHdr.SetRequestTarget(requestURI)
 	reqHdr.SetProtocol("HTTP/1.1")
-	reqHdr.Set("Host", svAddr.Addr().String())
+	reqHdr.Set("Host", apiURL.HostHeader())
 	reqHdr.Set("Connection", "close")
 	reqBytes, err := reqHdr.AppendRequest(nil)
 	util.RequireNoError(err, "building HTTP request")
@@ -288,6 +305,15 @@ func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr neti
 	}
 
 	statusCode, statusText := respHdr.Status()
+	if len(statusCode) == 3 && statusCode[0] == '3' {
+		location := string(respHdr.GetFold("Location"))
+		closeConn(&conn)
+		hint := "check API_URL"
+		if strings.HasPrefix(strings.ToLower(location), "https://") {
+			hint = "server redirected to https; set API_URL scheme to https"
+		}
+		return fmt.Errorf("unexpected redirect %s %s to %q: %s", statusCode, statusText, location, hint)
+	}
 	if string(statusCode) != "200" {
 		closeConn(&conn)
 		return fmt.Errorf("unexpected HTTP status: %s %s", statusCode, statusText)
