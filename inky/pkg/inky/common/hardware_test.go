@@ -32,3 +32,14 @@ func TestSendCommandDoesNotAllocate(t *testing.T) {
 		t.Errorf("last command byte = %#x, want %#x", got, cmd)
 	}
 }
+
+func TestCommandBytesIsIdentity(t *testing.T) {
+	if len(commandBytes) != 256 {
+		t.Fatalf("len(commandBytes) = %d, want 256", len(commandBytes))
+	}
+	for c := 0; c < 256; c++ {
+		if commandBytes[c] != byte(c) {
+			t.Fatalf("commandBytes[%#x] = %#x", c, commandBytes[c])
+		}
+	}
+}

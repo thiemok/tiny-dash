@@ -8,7 +8,8 @@
 // [slog.Any], do not allocate once the buffer has grown to the longest line.
 // Other kinds fall back to [slog.Value.String], which may allocate. Note that
 // the variadic ...any methods ([slog.Logger.Info] etc.) box their arguments
-// and allocate before the handler is reached.
+// and allocate before the handler is reached, and that slog.Record holds only
+// five attrs inline: a LogAttrs call with more allocates inside log/slog.
 package logfmt
 
 import (

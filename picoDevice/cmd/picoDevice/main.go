@@ -71,26 +71,33 @@ func main() {
 	logger.Info("✓ DHCP complete", "ip", netip.AddrFrom4(dhcpResults.AssignedAddr4).String())
 
 	lstack := stack.LnetoStack()
+	req := buildHTTPRequest(requestURI, apiURL)
 	f := &fetcher{
-		lstack:   lstack,
-		rstack:   lstack.StackRetrying(backoff),
-		addr:     svAddr,
-		req:      buildHTTPRequest(requestURI, apiURL),
-		hdrBuf:   make([]byte, 0, headerBufSize),
-		rxBuf:    make([]byte, tcpbufsize),
-		txBuf:    make([]byte, tcpbufsize),
+		lstack: lstack,
+		rstack: lstack.StackRetrying(backoff),
+		addr:   svAddr,
+		req:    req,
+		hdrBuf: make([]byte, 0, headerBufSize),
+		rxBuf:  make([]byte, tcpbufsize),
+		// The request is the only data ever sent.
+		txBuf:    make([]byte, len(req)),
 		framebuf: display.Buffer(),
 		logger:   logger,
 	}
 	f.hdr.ConfigBufferGrowth(false)
+	f.hdr.Reset(f.hdrBuf, maxHeaderPairs)
 	refreshDuration := time.Duration(config.RefreshInterval) * time.Second
 	ctx := context.Background()
 	var prev, cur runtime.MemStats
 
-	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", len(f.framebuf))
-
 	if debugBuild {
 		runtime.ReadMemStats(&prev)
+		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", len(f.framebuf), "heapSys", prev.HeapSys)
+
+		// Re-baseline so cycle 1 does not count the startup log's allocations.
+		runtime.ReadMemStats(&prev)
+	} else {
+		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", len(f.framebuf))
 	}
 	for cycle := 1; ; cycle++ {
 		stage, err := f.fetch()
@@ -106,15 +113,13 @@ func main() {
 
 		if debugBuild {
 			runtime.ReadMemStats(&cur)
+			// At most five attrs: slog.Record heap-allocates beyond its inline array.
 			logger.LogAttrs(ctx, slog.LevelInfo, "cycle",
 				slog.Int("n", cycle),
 				slog.Bool("ok", ok),
 				slog.Uint64("mallocs", cur.Mallocs-prev.Mallocs),
 				slog.Uint64("bytes", cur.TotalAlloc-prev.TotalAlloc),
 				slog.Uint64("heapAlloc", cur.HeapAlloc),
-				slog.Uint64("heapSys", cur.HeapSys),
-				slog.Uint64("totalMallocs", cur.Mallocs),
-				slog.Uint64("frees", cur.Frees),
 			)
 			prev = cur
 		} else {
@@ -252,8 +257,8 @@ func buildHTTPRequest(requestURI string, apiURL apiurl.URL) []byte {
 	return reqBytes
 }
 
-// fetcher holds everything a refresh cycle needs so that fetch, once the
-// header pair table has been sized on the first call, does not allocate.
+// fetcher holds everything a refresh cycle needs so that fetch does not
+// allocate.
 type fetcher struct {
 	lstack   *xnet.StackAsync
 	rstack   xnet.StackRetrying
@@ -279,10 +284,17 @@ func (f *fetcher) fetch() (stage string, err error) {
 		RWBackoff:         backoff,
 	})
 	if err != nil {
+		// Configure only fails on a conn that is not closed; abort it so the
+		// next cycle can reconfigure instead of failing forever.
+		conn.Abort()
 		return "conn configure", err
 	}
 
 	lport := uint16(f.lstack.Prand32()>>17) + 1024
+	// The only steady-state allocations (2 × 8 B) happen here, inside lneto:
+	// under TinyGo, registering the conn stores s.Demux/s.Encapsulate as
+	// bound method values (internet.makecbnode). An on-subnet server adds the
+	// escaping MAC of subnetTable.hwDynamicResolve. Both need upstream fixes.
 	err = f.rstack.DoDialTCP(conn, lport, f.addr, connTimeout, 3)
 	if err != nil {
 		closeConn(conn)
@@ -340,7 +352,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 			slog.String("location", bytesString(location)), slog.String("hint", hint))
 		return "status", errRedirect
 	}
-	if !(len(statusCode) == 3 && statusCode[0] == '2' && statusCode[1] == '0' && statusCode[2] == '0') {
+	if bytesString(statusCode) != "200" {
 		closeConn(conn)
 		f.logger.LogAttrs(context.Background(), slog.LevelError, "unexpected HTTP status",
 			slog.String("status", bytesString(statusCode)), slog.String("statusText", bytesString(statusText)))
