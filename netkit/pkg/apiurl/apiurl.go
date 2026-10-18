@@ -137,8 +137,15 @@ func (u URL) AddrPort() (netip.AddrPort, bool) {
 }
 
 // RequestTarget joins PathPrefix with path, which must start with "/".
-// It allocates; build request targets once and reuse them.
+// It allocates; build request targets once and reuse them, or use
+// [URL.AppendRequestTarget].
 func (u URL) RequestTarget(path string) string { return u.PathPrefix + path }
+
+// AppendRequestTarget appends PathPrefix and path to dst. It does not allocate
+// when dst has enough capacity.
+func (u URL) AppendRequestTarget(dst []byte, path string) []byte {
+	return append(append(dst, u.PathPrefix...), path...)
+}
 
 // String returns the normalized URL.
 func (u URL) String() string { return u.Scheme + "://" + u.hostHeader + u.PathPrefix }

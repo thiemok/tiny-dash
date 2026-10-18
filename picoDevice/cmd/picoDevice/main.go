@@ -9,8 +9,8 @@ import (
 	"net/netip"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/soypat/cyw43439"
 	"github.com/soypat/cyw43439/examples/cywnet"
@@ -24,6 +24,7 @@ import (
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
 	util "github.com/thiemok/tiny-dash/util/pkg"
+	"github.com/thiemok/tiny-dash/util/pkg/logfmt"
 )
 
 const connTimeout = 5 * time.Second
@@ -37,17 +38,30 @@ var logBuf [1024]byte
 
 const logFlushTimeout = 2 * time.Second
 
+// The image response header is ~140 bytes (Content-Length, Content-Type,
+// Date, Connection); leave room for a reverse proxy's additions.
+const (
+	headerBufSize  = 512
+	maxHeaderPairs = 12
+)
+
+var (
+	errHeaderTimeout   = errors.New("response header timeout")
+	errRedirect        = errors.New("unexpected redirect")
+	errHTTPStatus      = errors.New("unexpected HTTP status")
+	errIncompleteImage = errors.New("incomplete image data")
+)
+
 func main() {
 	logDrainer := initLogDrainer()
-	logRing := logDrainer.Src
-	logger := newLogger(logRing, slog.LevelInfo)
+	logger, logHandler := initLogger(logDrainer.Src)
 	defer flushLogOnPanic(logger, logDrainer)
 	time.Sleep(5 * time.Second)
 	logger.Info("tiny-dash picoDevice Starting...")
 
 	apiURL, svAddr := parseAPIURL(logger)
 	display, requestURI := initDisplay(logger, apiURL)
-	stack := initWifiStack(logger, newLogger(logRing, slog.LevelWarn))
+	stack := initWifiStack(logger, logHandler)
 
 	go loopForeverStack(stack)
 
@@ -56,71 +70,55 @@ func main() {
 	util.RequireNoError(err, "DHCP failed")
 	logger.Info("✓ DHCP complete", "ip", netip.AddrFrom4(dhcpResults.AssignedAddr4).String())
 
-	reqBytes := buildHTTPRequest(requestURI, apiURL)
-
-	// Pre-allocate buffers to avoid per-iteration allocation
-	framebuf := display.Buffer()
-	expectedSize := len(framebuf)
-	headerBuf := make([]byte, 256)
-	rxBuf := make([]byte, tcpbufsize)
-	txBuf := make([]byte, tcpbufsize)
-
 	lstack := stack.LnetoStack()
-	rstack := lstack.StackRetrying(func(uint) time.Duration { return pollTime })
+	f := &fetcher{
+		lstack:   lstack,
+		rstack:   lstack.StackRetrying(backoff),
+		addr:     svAddr,
+		req:      buildHTTPRequest(requestURI, apiURL),
+		hdrBuf:   make([]byte, 0, headerBufSize),
+		rxBuf:    make([]byte, tcpbufsize),
+		txBuf:    make([]byte, tcpbufsize),
+		framebuf: display.Buffer(),
+		logger:   logger,
+	}
+	f.hdr.ConfigBufferGrowth(false)
 	refreshDuration := time.Duration(config.RefreshInterval) * time.Second
-
-	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", expectedSize)
-
 	ctx := context.Background()
-	var memStats, prevMemStats runtime.MemStats
+	var prev, cur runtime.MemStats
+
+	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", len(f.framebuf))
+
 	if debugBuild {
-		runtime.ReadMemStats(&prevMemStats)
-		logger.LogAttrs(ctx, slog.LevelInfo, "heap",
-			slog.Uint64("heapSys", prevMemStats.HeapSys),
-			slog.Uint64("heapAlloc", prevMemStats.HeapAlloc),
-		)
+		runtime.ReadMemStats(&prev)
 	}
 	for cycle := 1; ; cycle++ {
-		cycleStart := time.Now()
-		// Fetch image on a separate goroutine
-		type fetchResult struct{ err error }
-		ch := make(chan fetchResult, 1)
-		go func() {
-			ch <- fetchResult{err: fetchImage(&rstack, lstack, svAddr, reqBytes, framebuf, headerBuf, rxBuf, txBuf, expectedSize, logger)}
-		}()
-
-		result := <-ch
-
-		if result.err != nil {
-			logger.Error("image fetch failed", "error", result.err)
+		stage, err := f.fetch()
+		ok := err == nil
+		if !ok {
+			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err))
+		} else if err = display.Update(); err != nil {
+			ok = false
+			logger.LogAttrs(ctx, slog.LevelError, "display update failed", slog.Any("error", err))
 		} else {
-			err = display.Update()
-			if err != nil {
-				logger.Error("display update failed", "error", err)
-			} else {
-				logger.Info("display updated successfully", "bytesReceived", expectedSize)
-			}
+			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)))
 		}
 
 		if debugBuild {
-			// mallocs and allocBytes cover everything since the previous report,
-			// including that report's own log line and the sleep in between.
-			// LogAttrs with at most five Attrs keeps the record inline, so this
-			// line adds no allocations of its own beyond the handler's.
-			runtime.ReadMemStats(&memStats)
-			logger.LogAttrs(ctx, slog.LevelInfo, "refresh cycle done",
-				slog.Int("cycle", cycle),
-				slog.Int64("cycleMs", time.Since(cycleStart).Milliseconds()),
-				slog.Uint64("mallocs", memStats.Mallocs-prevMemStats.Mallocs),
-				slog.Uint64("allocBytes", memStats.TotalAlloc-prevMemStats.TotalAlloc),
-				slog.Uint64("heapAlloc", memStats.HeapAlloc),
+			runtime.ReadMemStats(&cur)
+			logger.LogAttrs(ctx, slog.LevelInfo, "cycle",
+				slog.Int("n", cycle),
+				slog.Bool("ok", ok),
+				slog.Uint64("mallocs", cur.Mallocs-prev.Mallocs),
+				slog.Uint64("bytes", cur.TotalAlloc-prev.TotalAlloc),
+				slog.Uint64("heapAlloc", cur.HeapAlloc),
+				slog.Uint64("heapSys", cur.HeapSys),
+				slog.Uint64("totalMallocs", cur.Mallocs),
+				slog.Uint64("frees", cur.Frees),
 			)
-			prevMemStats = memStats
+			prev = cur
 		} else {
-			logger.LogAttrs(ctx, slog.LevelInfo, "refresh cycle done",
-				slog.Int("cycle", cycle),
-				slog.Int64("cycleMs", time.Since(cycleStart).Milliseconds()),
-			)
+			logger.LogAttrs(ctx, slog.LevelInfo, "cycle", slog.Int("n", cycle), slog.Bool("ok", ok))
 		}
 
 		time.Sleep(refreshDuration)
@@ -154,10 +152,11 @@ func flushLogOnPanic(logger *slog.Logger, drainer *logkit.Drainer) {
 	}
 }
 
-// newLogger writes to ring. Every record costs heap allocations in the
-// TextHandler, so the WiFi driver gets its own, quieter logger.
-func newLogger(ring *logkit.RingWriter, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewTextHandler(ring, &slog.HandlerOptions{Level: level}))
+// initLogger writes to ring; logfmt formats each record into one Write, so
+// the ring only ever holds or drops whole records.
+func initLogger(ring *logkit.RingWriter) (*slog.Logger, *logfmt.Handler) {
+	h := logfmt.NewHandler(ring, &logfmt.Options{Level: slog.LevelInfo})
+	return slog.New(h), h
 }
 
 func initDisplay(logger *slog.Logger, apiURL apiurl.URL) (common.Display, string) {
@@ -178,26 +177,28 @@ func initDisplay(logger *slog.Logger, apiURL apiurl.URL) (common.Display, string
 
 	logger.Info("Display Information", "resolution", fmt.Sprintf("%d x %d", width, height), "colorDepth", colorDepth, "colors", len(supportedColors))
 
-	colorsParam := ""
+	uri := apiURL.AppendRequestTarget(make([]byte, 0, 128), "/api/dashboard/image")
+	uri = append(uri, "?width="...)
+	uri = strconv.AppendInt(uri, int64(width), 10)
+	uri = append(uri, "&height="...)
+	uri = strconv.AppendInt(uri, int64(height), 10)
+	uri = append(uri, "&colorDepth="...)
+	uri = strconv.AppendInt(uri, int64(colorDepth), 10)
+	uri = append(uri, "&colors="...)
 	for i, c := range supportedColors {
 		if i > 0 {
-			colorsParam += ","
+			uri = append(uri, ',')
 		}
-		colorsParam += strconv.Itoa(int(c))
+		uri = strconv.AppendInt(uri, int64(c), 10)
 	}
 
-	requestURI := apiURL.RequestTarget("/api/dashboard/image") + "?width=" + strconv.Itoa(width) +
-		"&height=" + strconv.Itoa(height) +
-		"&colorDepth=" + strconv.Itoa(colorDepth) +
-		"&colors=" + colorsParam
-
-	return display, requestURI
+	return display, string(uri)
 }
 
-func initWifiStack(logger, driverLogger *slog.Logger) *cywnet.Stack {
+func initWifiStack(logger *slog.Logger, logHandler *logfmt.Handler) *cywnet.Stack {
 	logger.Info("Initializing WiFi...")
 	devcfg := cyw43439.DefaultWifiConfig()
-	devcfg.Logger = driverLogger
+	devcfg.Logger = slog.New(logHandler.WithLevel(slog.LevelWarn))
 	stack, err := cywnet.NewConfiguredPicoWithStack(config.WifiSSID, config.WifiPassword, devcfg, cywnet.StackConfig{
 		Hostname:          "tiny-dash-pico",
 		MaxActiveTCPPorts: 1,
@@ -215,6 +216,8 @@ func loopForeverStack(stack *cywnet.Stack) {
 		}
 	}
 }
+
+func backoff(uint) time.Duration { return pollTime }
 
 // parseAPIURL fails before WiFi bring-up so a bad API_URL is reported
 // immediately instead of after a DHCP round trip.
@@ -249,46 +252,66 @@ func buildHTTPRequest(requestURI string, apiURL apiurl.URL) []byte {
 	return reqBytes
 }
 
-func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr netip.AddrPort, reqBytes, framebuf, headerBuf, rxBuf, txBuf []byte, expectedSize int, logger *slog.Logger) error {
-	var conn tcp.Conn
-	err := conn.Configure(tcp.ConnConfig{
-		RxBuf:             rxBuf,
-		TxBuf:             txBuf,
+// fetcher holds everything a refresh cycle needs so that fetch, once the
+// header pair table has been sized on the first call, does not allocate.
+type fetcher struct {
+	lstack   *xnet.StackAsync
+	rstack   xnet.StackRetrying
+	addr     netip.AddrPort
+	req      []byte
+	conn     tcp.Conn
+	hdr      httpraw.HeaderV1
+	hdrBuf   []byte
+	rxBuf    []byte
+	txBuf    []byte
+	framebuf []byte
+	logger   *slog.Logger
+}
+
+// fetch streams the image into framebuf. On failure it returns the failing
+// stage alongside the error so that callers need not wrap it.
+func (f *fetcher) fetch() (stage string, err error) {
+	conn := &f.conn
+	err = conn.Configure(tcp.ConnConfig{
+		RxBuf:             f.rxBuf,
+		TxBuf:             f.txBuf,
 		TxPacketQueueSize: 3,
-		RWBackoff:         func(uint) time.Duration { return pollTime },
+		RWBackoff:         backoff,
 	})
 	if err != nil {
-		return fmt.Errorf("conn configure: %w", err)
+		return "conn configure", err
 	}
 
-	lport := uint16(lstack.Prand32()>>17) + 1024
-	err = rstack.DoDialTCP(&conn, lport, svAddr, connTimeout, 3)
+	lport := uint16(f.lstack.Prand32()>>17) + 1024
+	err = f.rstack.DoDialTCP(conn, lport, f.addr, connTimeout, 3)
 	if err != nil {
-		closeConn(&conn)
-		return fmt.Errorf("tcp dial: %w", err)
+		closeConn(conn)
+		return "tcp dial", err
 	}
 
-	_, err = conn.Write(reqBytes)
+	_, err = conn.Write(f.req)
 	if err != nil {
-		closeConn(&conn)
-		return fmt.Errorf("write request: %w", err)
+		closeConn(conn)
+		return "write request", err
 	}
 
-	// Parse response headers
-	var respHdr httpraw.HeaderV1
-	respHdr.Reset(nil, 0)
+	hdr := &f.hdr
+	hdr.Reset(f.hdrBuf[:0], maxHeaderPairs)
 	headerDeadline := time.Now().Add(10 * time.Second)
 	conn.SetReadDeadline(headerDeadline)
 	headerParsed := false
 
 	for time.Now().Before(headerDeadline) {
-		n, _ := conn.Read(headerBuf)
+		n, readErr := hdr.ReadFromLimited(conn, hdr.BufferFree())
+		if readErr == httpraw.ErrBufferExhausted {
+			closeConn(conn)
+			return "header read", readErr
+		}
 		if n > 0 {
-			respHdr.ReadFromBytes(headerBuf[:n])
-			needMore, parseErr := respHdr.TryParse(true)
+			needMore, parseErr := hdr.TryParse(true)
 			if parseErr != nil && !needMore {
-				closeConn(&conn)
-				return fmt.Errorf("header parse: %w", parseErr)
+				closeConn(conn)
+				return "header parse", parseErr
 			}
 			if !needMore {
 				headerParsed = true
@@ -300,42 +323,41 @@ func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr neti
 	}
 
 	if !headerParsed {
-		closeConn(&conn)
-		return fmt.Errorf("response header timeout")
+		closeConn(conn)
+		return "header read", errHeaderTimeout
 	}
 
-	statusCode, statusText := respHdr.Status()
+	statusCode, statusText := hdr.Status()
 	if len(statusCode) == 3 && statusCode[0] == '3' {
-		location := string(respHdr.GetFold("Location"))
-		closeConn(&conn)
+		location := hdr.GetFold("Location")
+		closeConn(conn)
 		hint := "check API_URL"
-		if strings.HasPrefix(strings.ToLower(location), "https://") {
+		if hasPrefixFold(location, "https://") {
 			hint = "server redirected to https; set API_URL scheme to https"
 		}
-		return fmt.Errorf("unexpected redirect %s %s to %q: %s", statusCode, statusText, location, hint)
+		f.logger.LogAttrs(context.Background(), slog.LevelError, "unexpected redirect",
+			slog.String("status", bytesString(statusCode)), slog.String("statusText", bytesString(statusText)),
+			slog.String("location", bytesString(location)), slog.String("hint", hint))
+		return "status", errRedirect
 	}
-	if string(statusCode) != "200" {
-		closeConn(&conn)
-		return fmt.Errorf("unexpected HTTP status: %s %s", statusCode, statusText)
+	if !(len(statusCode) == 3 && statusCode[0] == '2' && statusCode[1] == '0' && statusCode[2] == '0') {
+		closeConn(conn)
+		f.logger.LogAttrs(context.Background(), slog.LevelError, "unexpected HTTP status",
+			slog.String("status", bytesString(statusCode)), slog.String("statusText", bytesString(statusText)))
+		return "status", errHTTPStatus
 	}
 
-	// Stream body into framebuffer
-	bodyReceived := 0
-
-	initialBody, bodyErr := respHdr.Body()
-	if bodyErr != nil {
-		closeConn(&conn)
-		return fmt.Errorf("get body: %w", bodyErr)
+	initialBody, err := hdr.Body()
+	if err != nil {
+		closeConn(conn)
+		return "get body", err
 	}
-	if len(initialBody) > 0 {
-		n := copy(framebuf[bodyReceived:], initialBody)
-		bodyReceived += n
-	}
+	bodyReceived := copy(f.framebuf, initialBody)
 
 	bodyDeadline := time.Now().Add(30 * time.Second)
 	conn.SetReadDeadline(bodyDeadline)
-	for bodyReceived < expectedSize && time.Now().Before(bodyDeadline) {
-		n, _ := conn.Read(framebuf[bodyReceived:])
+	for bodyReceived < len(f.framebuf) && time.Now().Before(bodyDeadline) {
+		n, _ := conn.Read(f.framebuf[bodyReceived:])
 		if n > 0 {
 			bodyReceived += n
 		} else {
@@ -343,13 +365,15 @@ func fetchImage(rstack *xnet.StackRetrying, lstack *xnet.StackAsync, svAddr neti
 		}
 	}
 
-	closeConn(&conn)
+	closeConn(conn)
 
-	if bodyReceived != expectedSize {
-		return fmt.Errorf("incomplete image data: received %d, expected %d", bodyReceived, expectedSize)
+	if bodyReceived != len(f.framebuf) {
+		f.logger.LogAttrs(context.Background(), slog.LevelError, "incomplete image data",
+			slog.Int("received", bodyReceived), slog.Int("expected", len(f.framebuf)))
+		return "body read", errIncompleteImage
 	}
 
-	return nil
+	return "", nil
 }
 
 func closeConn(conn *tcp.Conn) {
@@ -358,4 +382,26 @@ func closeConn(conn *tcp.Conn) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	conn.Abort()
+}
+
+func hasPrefixFold(b []byte, prefix string) bool {
+	if len(b) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		c := b[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// bytesString views b as a string without copying, for log attributes that
+// the logfmt handler formats before returning.
+func bytesString(b []byte) string {
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }

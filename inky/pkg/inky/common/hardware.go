@@ -32,13 +32,22 @@ func BusyWait(busyPin Pin, timeoutSeconds int) bool {
 	return false // Timeout
 }
 
+// commandBytes[c] == c, so SendCommand can pass a one-byte slice to the SPI
+// interface without heap-allocating one per call.
+var commandBytes = func() (t [256]byte) {
+	for i := range t {
+		t[i] = byte(i)
+	}
+	return t
+}()
+
 // SendCommand sends a command with optional data to the display via SPI
 // This is a common operation used by all display types
 func SendCommand(spi SPI, csPin, dcPin Pin, command byte, data []byte) {
 	csPin.Set(false)
 	dcPin.Set(false)
 	time.Sleep(300 * time.Microsecond)
-	spi.Tx([]byte{command}, nil)
+	spi.Tx(commandBytes[command:command+1], nil)
 
 	if data != nil && len(data) > 0 {
 		dcPin.Set(true)

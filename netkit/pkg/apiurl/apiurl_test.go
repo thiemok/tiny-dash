@@ -110,3 +110,23 @@ func TestAddrPort(t *testing.T) {
 		t.Error("IsDefaultPort false for https:443")
 	}
 }
+
+func TestAccessorsDoNotAllocate(t *testing.T) {
+	u, err := Parse("http://192.0.2.10:8080/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 0, 64)
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = u.HostHeader()
+		_, _ = u.AddrPort()
+		_ = u.IsDefaultPort()
+		buf = u.AppendRequestTarget(buf[:0], "/api/dashboard/image")
+	})
+	if allocs != 0 {
+		t.Errorf("accessors allocated %v times per run, want 0", allocs)
+	}
+	if got := string(buf); got != "/x/api/dashboard/image" {
+		t.Errorf("AppendRequestTarget = %q", got)
+	}
+}
