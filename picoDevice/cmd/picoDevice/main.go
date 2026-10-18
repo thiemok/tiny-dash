@@ -22,6 +22,7 @@ import (
 	"github.com/thiemok/tiny-dash/logkit"
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
 	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
+	"github.com/thiemok/tiny-dash/netkit/pkg/resolve"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
 	util "github.com/thiemok/tiny-dash/util/pkg"
 	"github.com/thiemok/tiny-dash/util/pkg/logfmt"
@@ -55,6 +56,17 @@ const (
 	maxFetchRetries  = 2
 )
 
+// lneto's StackAsync does not report a record's TTL, so a resolved API host
+// is trusted for dnsMaxAge, until maxDialFailures consecutive dials fail, or
+// until the next WiFi reconnect. maxDialFailures stays below
+// maxFetchFailures so a moved server is looked up before the link is reset.
+const (
+	dnsMaxAge       = time.Hour
+	maxDialFailures = 2
+	dnsTimeout      = 2 * time.Second
+	dnsRetries      = 3
+)
+
 // logBuf bounds log memory; records that arrive while it is full are dropped
 // rather than blocking the caller. At Info level the fill peaks at ~350 B
 // (the startup burst), so 1 KiB leaves about 3x headroom.
@@ -75,6 +87,7 @@ var (
 	errHTTPStatus      = errors.New("unexpected HTTP status")
 	errIncompleteImage = errors.New("incomplete image data")
 	errBodyStall       = errors.New("image body stalled")
+	errNoIPv4          = errors.New("no IPv4 address in DNS answer")
 )
 
 func main() {
@@ -91,24 +104,27 @@ func main() {
 		logger.LogAttrs(context.Background(), slog.LevelInfo, "✓ crc32 slicing table released")
 	}
 
-	apiURL, svAddr := parseAPIURL(logger)
+	apiURL := parseAPIURL(logger)
+	dnsFallback := parseDNSServer(logger)
 	display, requestURI := initDisplay(logger, apiURL)
 	logger.Info("Initializing WiFi...")
 	// Warn keeps the driver from allocating on every reconnect: its Info-level
 	// rxEvent records carry eight attrs, beyond slog.Record's inline five.
 	// Raise it to Info to see the event status and reason of a failed join.
-	link := newWifiLink(logger, slog.New(logHandler.WithLevel(slog.LevelWarn)))
+	link := newWifiLink(logger, slog.New(logHandler.WithLevel(slog.LevelWarn)), dnsFallback)
 	link.connect()
 
 	lstack := &link.stack
+	rstack := lstack.StackRetrying(pollBackoff)
 	req := buildHTTPRequest(requestURI, apiURL)
 	f := &fetcher{
-		lstack: lstack,
-		rstack: lstack.StackRetrying(pollBackoff),
-		addr:   svAddr,
-		req:    req,
-		hdrBuf: make([]byte, 0, headerBufSize),
-		rxBuf:  make([]byte, rxBufSize),
+		lstack:   lstack,
+		rstack:   rstack,
+		resolver: newResolver(apiURL, rstack),
+		port:     apiURL.Port,
+		req:      req,
+		hdrBuf:   make([]byte, 0, headerBufSize),
+		rxBuf:    make([]byte, rxBufSize),
 		// The request is the only data ever sent.
 		txBuf:        make([]byte, len(req)),
 		framebuf:     display.Buffer(),
@@ -123,12 +139,12 @@ func main() {
 
 	if debugBuild {
 		runtime.ReadMemStats(&prev)
-		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", len(f.framebuf), "heapSys", prev.HeapSys)
+		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "dns", !f.resolver.IsStatic(), "expectedBytes", len(f.framebuf), "heapSys", prev.HeapSys)
 
 		// Re-baseline so cycle 1 does not count the startup log's allocations.
 		runtime.ReadMemStats(&prev)
 	} else {
-		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", len(f.framebuf))
+		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "dns", !f.resolver.IsStatic(), "expectedBytes", len(f.framebuf))
 	}
 	fetchFailures := 0
 	for cycle := 1; ; cycle++ {
@@ -137,6 +153,9 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelWarn, "wifi link lost; reconnecting",
 				slog.Bool("linkUp", link.up()), slog.Int("fetchFailures", fetchFailures))
 			link.connect()
+			// The new lease may come with another DNS server or another view
+			// of the network, e.g. after moving to a different access point.
+			f.resolver.Invalidate()
 			fetchFailures = 0
 			if debugBuild {
 				// connect logs its own allocations; keep them out of the cycle's.
@@ -259,23 +278,54 @@ func pollBackoff(uint) time.Duration { return pollTime }
 
 // parseAPIURL fails before WiFi bring-up so a bad API_URL is reported
 // immediately instead of after a DHCP round trip.
-func parseAPIURL(logger *slog.Logger) (apiurl.URL, netip.AddrPort) {
+func parseAPIURL(logger *slog.Logger) apiurl.URL {
 	apiURL, err := apiurl.Parse(config.APIURL)
 	if err == nil && apiURL.Scheme == apiurl.SchemeHTTPS {
 		// TODO(THI-32): TLS client.
 		err = errors.New("https is not supported yet; use an http:// API_URL")
 	}
-	svAddr, ok := apiURL.AddrPort()
-	if err == nil && !ok {
-		// TODO(THI-29): resolve host names via DNS.
-		err = errors.New("host name " + apiURL.Host + " needs DNS, which is not supported yet; use an IP literal")
-	}
 	if err != nil {
 		logger.Error("invalid API_URL", "url", config.APIURL, "error", err)
 	}
 	util.RequireNoError(err, "invalid API_URL "+config.APIURL)
-	logger.Info("✓ API URL parsed", "url", apiURL.String(), "host", apiURL.HostHeader(), "pathPrefix", apiURL.PathPrefix)
-	return apiURL, svAddr
+	logger.Info("✓ API URL parsed", "url", apiURL.String(), "host", apiURL.HostHeader(), "pathPrefix", apiURL.PathPrefix, "dns", !apiURL.IsIPLiteral())
+	return apiURL
+}
+
+func parseDNSServer(logger *slog.Logger) netip.Addr {
+	if config.DNSServer == "" {
+		return netip.Addr{}
+	}
+	addr, err := netip.ParseAddr(config.DNSServer)
+	if err == nil && !addr.Is4() {
+		err = errors.New("lneto queries DNS over IPv4 only")
+	}
+	if err != nil {
+		logger.Error("invalid DNS_SERVER", "server", config.DNSServer, "error", err)
+	}
+	util.RequireNoError(err, "invalid DNS_SERVER "+config.DNSServer)
+	return addr
+}
+
+// newResolver skips DNS for IP literals so local dev sessions work without a
+// DNS server.
+func newResolver(apiURL apiurl.URL, rstack xnet.StackRetrying) *resolve.Resolver {
+	if apiURL.IsIPLiteral() {
+		return resolve.Static(apiURL.Addr)
+	}
+	lookup := func(host string) (netip.Addr, time.Duration, error) {
+		addrs, err := rstack.DoLookupIP(host, dnsTimeout, dnsRetries)
+		if err != nil {
+			return netip.Addr{}, 0, err
+		}
+		for _, addr := range addrs {
+			if addr.Is4() {
+				return addr, 0, nil
+			}
+		}
+		return netip.Addr{}, 0, errNoIPv4
+	}
+	return resolve.New(apiURL.Host, lookup, resolve.Policy{MaxTTL: dnsMaxAge, MaxDialFailures: maxDialFailures})
 }
 
 func buildHTTPRequest(requestURI string, apiURL apiurl.URL) []byte {
@@ -295,7 +345,8 @@ func buildHTTPRequest(requestURI string, apiURL apiurl.URL) []byte {
 type fetcher struct {
 	lstack   *xnet.StackAsync
 	rstack   xnet.StackRetrying
-	addr     netip.AddrPort
+	resolver *resolve.Resolver
+	port     uint16
 	req      []byte
 	conn     tcp.Conn
 	hdr      httpraw.HeaderV1
@@ -310,6 +361,8 @@ type fetcher struct {
 	rto tcp.RTO
 
 	retryBackoff backoff.Exponential
+
+	ipbuf [len("255.255.255.255")]byte
 }
 
 // fetchRetrying retries a fetch whose response header never arrived or whose
@@ -342,6 +395,11 @@ func nanotime() int64 { return int64(time.Since(bootTime)) }
 // fetch streams the image into framebuf. On failure it returns the failing
 // stage alongside the error so that callers need not wrap it.
 func (f *fetcher) fetch() (stage string, err error) {
+	addr, err := f.resolveServer()
+	if err != nil {
+		return "dns lookup", err
+	}
+
 	conn := &f.conn
 	err = conn.Configure(tcp.ConnConfig{
 		RxBuf:             f.rxBuf,
@@ -363,11 +421,13 @@ func (f *fetcher) fetch() (stage string, err error) {
 	// under TinyGo, registering the conn stores s.Demux/s.Encapsulate as
 	// bound method values (internet.makecbnode). An on-subnet server adds the
 	// escaping MAC of subnetTable.hwDynamicResolve. Both need upstream fixes.
-	err = f.rstack.DoDialTCP(conn, lport, f.addr, connTimeout, 3)
+	err = f.rstack.DoDialTCP(conn, lport, netip.AddrPortFrom(addr, f.port), connTimeout, 3)
 	if err != nil {
+		f.resolver.DialFailed()
 		closeConn(conn)
 		return "tcp dial", err
 	}
+	f.resolver.DialSucceeded()
 
 	_, err = conn.Write(f.req)
 	if err != nil {
@@ -460,6 +520,48 @@ func (f *fetcher) fetch() (stage string, err error) {
 	}
 
 	return "", nil
+}
+
+// resolveServer returns the API server's address, logging every DNS lookup,
+// with its allocations in debug builds. A failed lookup falls back to the
+// address from the previous one, if any.
+func (f *fetcher) resolveServer() (netip.Addr, error) {
+	var before, after runtime.MemStats
+	if debugBuild {
+		runtime.ReadMemStats(&before)
+	}
+	start := time.Now()
+	addr, looked, err := f.resolver.Resolve(start)
+	if !looked {
+		return addr, err
+	}
+	ctx := context.Background()
+	if err != nil {
+		f.logger.LogAttrs(ctx, slog.LevelError, "dns lookup failed",
+			slog.String("host", f.resolver.Host()), slog.Any("error", err),
+			slog.Bool("usingPrevious", addr.IsValid()))
+		if addr.IsValid() {
+			return addr, nil
+		}
+		return addr, err
+	}
+	if debugBuild {
+		runtime.ReadMemStats(&after)
+		f.logger.LogAttrs(ctx, slog.LevelInfo, "✓ API host resolved",
+			slog.String("host", f.resolver.Host()),
+			slog.String("ip", bytesString(addr.AppendTo(f.ipbuf[:0]))),
+			slog.Duration("took", time.Since(start)),
+			slog.Uint64("mallocs", after.Mallocs-before.Mallocs),
+			slog.Uint64("bytes", after.TotalAlloc-before.TotalAlloc),
+		)
+	} else {
+		f.logger.LogAttrs(ctx, slog.LevelInfo, "✓ API host resolved",
+			slog.String("host", f.resolver.Host()),
+			slog.String("ip", bytesString(addr.AppendTo(f.ipbuf[:0]))),
+			slog.Duration("took", time.Since(start)),
+		)
+	}
+	return addr, nil
 }
 
 // closeConn shuts the read side down before closing so that a server still

@@ -49,10 +49,24 @@ The picoDevice application:
 The URL is parsed by `netkit/pkg/apiurl` at startup; an invalid URL halts the device
 with an `invalid API_URL` log line before WiFi is brought up.
 
+### DNS
+
+A host name in `API_URL` is resolved on the device before the first fetch, using lneto's DNS
+client and the DNS server from the DHCP lease (logged as `dns server ... source=dhcp` after
+each WiFi connect). `DNS_SERVER` (an IPv4 literal) is used only if DHCP offers none. An IP
+literal (e.g. `http://192.168.1.100:8080` for a local `nx run api:serve`) skips DNS entirely.
+
+Each lookup is logged as `✓ API host resolved` with the address and the time it took; debug
+builds add the lookup's heap allocations. lneto does not expose the record's TTL, so the
+address is looked up again
+after an hour, after two consecutive failed TCP dials, or after a WiFi reconnect. If that
+lookup fails, the previous address is kept (`dns lookup failed ... usingPrevious=true`).
+The caching policy lives in `netkit/pkg/resolve`.
+
 Current limitations:
 
-- **Host names** need DNS, which is not implemented yet: use an IP literal
-  (e.g. `http://192.168.1.100:8080` for a local `nx run api:serve`).
+- Only A records are used, and lneto decodes just the first answer record, so the lookup
+  fails for a host name that the resolver answers with a CNAME chain.
 - **https** is not supported yet.
 - **Redirects** (3xx) are not followed. A redirect to https (e.g. a reverse proxy's
   http→https redirect) is logged as
@@ -201,7 +215,7 @@ network found, 1 = failure).
 - TinyGo (for building Pico 2 W firmware)
 - github.com/soypat/cyw43439 (WiFi driver)
 - github.com/thiemok/tiny-dash/inky (e-ink display library)
-- github.com/thiemok/tiny-dash/netkit (API URL parsing, retry backoff)
+- github.com/thiemok/tiny-dash/netkit (API URL parsing, retry backoff, DNS caching policy)
 
 ### Project Structure
 
