@@ -45,12 +45,14 @@ const pollTime = 5 * time.Millisecond
 // to the server is gone.
 const maxFetchFailures = 3
 
-// A body read that makes no progress for bodyStallTimeout is abandoned and
-// the fetch retried up to maxBodyRetries times; a healthy transfer never
-// pauses for more than a few hundred milliseconds.
+// A body read that makes no progress for bodyStallTimeout, or a response
+// header that does not arrive within headerTimeout, is abandoned and the
+// fetch retried up to maxFetchRetries times; a healthy transfer never pauses
+// for more than a few hundred milliseconds.
 const (
+	headerTimeout    = 10 * time.Second
 	bodyStallTimeout = 5 * time.Second
-	maxBodyRetries   = 2
+	maxFetchRetries  = 2
 )
 
 // logBuf bounds log memory; records that arrive while it is full are dropped
@@ -302,18 +304,22 @@ type fetcher struct {
 	txBuf    []byte
 	framebuf []byte
 	logger   *slog.Logger
+	// rto retransmits the request when its segment is lost. Otherwise lneto
+	// only resends after duplicate ACKs, which a lone request never draws, so
+	// the server would never answer. The conn resets it on every open.
+	rto tcp.RTO
 
 	retryBackoff backoff.Exponential
 }
 
-// fetchRetrying retries a fetch whose body stalled or ended early. framebuf is
-// only shown after a complete fetch, so the display keeps the last image
-// while retries overwrite the buffer.
+// fetchRetrying retries a fetch whose response header never arrived or whose
+// body stalled or ended early. framebuf is only shown after a complete fetch,
+// so the display keeps the last image while retries overwrite the buffer.
 func (f *fetcher) fetchRetrying() (stage string, err error) {
 	f.retryBackoff.Reset()
 	for retry := 0; ; retry++ {
 		stage, err = f.fetch()
-		if retry == maxBodyRetries || (err != errBodyStall && err != errIncompleteImage) {
+		if retry == maxFetchRetries || !retryable(err) {
 			return stage, err
 		}
 		wait := f.retryBackoff.Next(rand32())
@@ -322,6 +328,16 @@ func (f *fetcher) fetchRetrying() (stage string, err error) {
 		time.Sleep(wait)
 	}
 }
+
+func retryable(err error) bool {
+	return err == errHeaderTimeout || err == errBodyStall || err == errIncompleteImage
+}
+
+var bootTime = time.Now()
+
+// nanotime is the monotonic clock lneto's loss recovery runs on; unlike
+// UnixNano it cannot jump when the wall clock is set.
+func nanotime() int64 { return int64(time.Since(bootTime)) }
 
 // fetch streams the image into framebuf. On failure it returns the failing
 // stage alongside the error so that callers need not wrap it.
@@ -332,6 +348,8 @@ func (f *fetcher) fetch() (stage string, err error) {
 		TxBuf:             f.txBuf,
 		TxPacketQueueSize: 3,
 		RWBackoff:         pollBackoff,
+		LossRecovery:      &f.rto,
+		Nanotime:          nanotime,
 	})
 	if err != nil {
 		// Configure only fails on a conn that is not closed; abort it so the
@@ -359,7 +377,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 
 	hdr := &f.hdr
 	hdr.Reset(f.hdrBuf[:0], maxHeaderPairs)
-	headerDeadline := time.Now().Add(10 * time.Second)
+	headerDeadline := time.Now().Add(headerTimeout)
 	conn.SetReadDeadline(headerDeadline)
 	headerParsed := false
 
