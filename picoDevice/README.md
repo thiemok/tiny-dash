@@ -83,6 +83,22 @@ tinygo monitor
 
 Or use any serial terminal at 115200 baud.
 
+Logs go through a 4 KiB [logkit](../logkit) ring buffer, not straight to `machine.Serial`.
+TinyGo's USB-CDC `Write` blocks until the host reads, so a port with DTR asserted but no reader
+would otherwise stall every goroutine that logs. Output is discarded while no reader holds DTR.
+If records were dropped, a `logkit: dropped=<bytes>` line is printed, and each
+`refresh cycle done` line reports the running total as `logDropped`.
+
+For a non-interactive capture:
+
+```bash
+stty -F /dev/ttyACM0 115200 raw -echo; timeout 300 cat /dev/ttyACM0 | tee device.log
+```
+
+`tools/serialstress` is a small firmware that reproduces the stall; `tools/build.sh` builds it into
+`dist/serialstress.uf2`. Each line reports how long the previous `Write` blocked. Build it with
+`-ldflags="-X main.mode=ring"` to compare with logkit.
+
 ## How It Works
 
 1. **Startup**: Initializes hardware and detects the e-ink display
