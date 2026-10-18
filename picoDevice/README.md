@@ -149,7 +149,7 @@ stty -F /dev/ttyACM0 115200 raw -echo; timeout 300 cat /dev/ttyACM0 | tee device
 ## How It Works
 
 1. **Startup**: Initializes hardware and detects the e-ink display
-2. **WiFi Connection**: Connects to the configured WiFi network with retry logic
+2. **WiFi Connection**: Joins the configured WiFi network and runs DHCP, retrying with backoff
 3. **Main Loop**:
    - Fetches image data from the API server
    - Sends display parameters (resolution, color depth, supported colors)
@@ -160,10 +160,33 @@ stty -F /dev/ttyACM0 115200 raw -echo; timeout 300 cat /dev/ttyACM0 | tee device
 
 ## Error Handling
 
-- WiFi connection failures: Retries up to 5 times with 2-second delays
+- WiFi connection failures: the CYW43439 is initialized once; every attempt joins and runs DHCP
+  and gateway ARP. (Re-running `Device.Init` fails the SPI test on the current driver, so a
+  failed attempt re-joins instead of power-cycling the chip.) A failed attempt is logged as `wifi connect failed` with the
+  stage and error, then retried after a capped exponential backoff (1 s doubling to 60 s, each
+  delay jittered into [d/2, d) by the RP2350 RNG, see `netkit/pkg/backoff`). This repeats until
+  it succeeds; the device never gives up.
+- Link loss: before each refresh the loop checks the link state the chip reports (LINK,
+  DEAUTH and DISASSOC events drop it) and reconnects as above. Three consecutive network
+  fetch failures also trigger a reconnect. The display keeps the last image meanwhile.
 - API fetch failures: Logs error and keeps the previous image
 - Display update failures: Logs error but continues the refresh loop
 - Invalid response sizes: Validates before updating display
+
+### WiFi test knobs
+
+These `.env` settings force join failures for hardware testing. Only debug builds read them
+(`pnpm nx run picoDevice:upload:debug`, see [Debug builds](#debug-builds)); release builds
+ignore them. They default to 0 (disabled).
+
+- `WIFI_TEST_FAIL_JOINS=N`: the first N joins at boot use a missing SSID, so the chip
+  reports a genuine join failure (`join:SET_SSID failed`).
+- `WIFI_TEST_OUTAGE_AFTER_CYCLE=K` with `WIFI_TEST_OUTAGE_FAIL_JOINS=M`: after refresh cycle
+  K the chip joins the missing SSID, which makes it leave the access point like an outage,
+  and the next M joins fail the same way.
+
+The cyw43439 driver logs at Info, so each join records `rxEvent` lines whose `status` and
+`reason` say why it failed (status 3 = no network found, 1 = failure).
 
 ## Development
 
@@ -172,7 +195,7 @@ stty -F /dev/ttyACM0 115200 raw -echo; timeout 300 cat /dev/ttyACM0 | tee device
 - TinyGo (for building Pico 2 W firmware)
 - github.com/soypat/cyw43439 (WiFi driver)
 - github.com/thiemok/tiny-dash/inky (e-ink display library)
-- github.com/thiemok/tiny-dash/netkit (API URL parsing)
+- github.com/thiemok/tiny-dash/netkit (API URL parsing, retry backoff)
 
 ### Project Structure
 

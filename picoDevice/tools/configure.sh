@@ -40,6 +40,12 @@ const (
 	WifiPassword    = "$WIFI_PASSWORD"
 	APIURL          = "$API_URL"
 	RefreshInterval = $REFRESH_INTERVAL
+
+	// Hardware test knobs, read by debug builds only; 0 disables them.
+	// See .env.example.
+	WifiTestFailJoins        = ${WIFI_TEST_FAIL_JOINS:-0}
+	WifiTestOutageAfterCycle = ${WIFI_TEST_OUTAGE_AFTER_CYCLE:-0}
+	WifiTestOutageFailJoins  = ${WIFI_TEST_OUTAGE_FAIL_JOINS:-0}
 )
 EOF
 
