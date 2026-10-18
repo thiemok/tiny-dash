@@ -83,16 +83,17 @@ tinygo monitor
 
 Or use any serial terminal at 115200 baud.
 
-Logs go through a 4 KiB [logkit](../logkit) ring buffer, not straight to `machine.Serial`.
+Logs go through a 1 KiB [logkit](../logkit) ring buffer, not straight to `machine.Serial`.
 TinyGo's USB-CDC `Write` blocks until the host reads, so a port with DTR asserted but no reader
 would otherwise stall every goroutine that logs. Output is discarded while no reader holds DTR.
-If records were dropped, a `logkit: dropped=<bytes>` line is printed, and each
-`refresh cycle done` line reports the running total as `logDropped`.
+If records were dropped, a `logkit: dropped=<bytes>` line with the running total is printed.
+A panic in `main` (e.g. `util.RequireNoError` at startup) is first logged as `level=ERROR msg=panic`
+and the ring is flushed, so the message and the records before it reach the host.
 
 TinyGo advertises USB remote wakeup but never signals it. Linux autosuspends the device after
 2 s without serial traffic, even while a reader has the port open, and output would then stop
-until the port is reopened. `keepUSBHostAwake` (`cmd/picoDevice/usbwake.go`) signals the wakeup
-whenever output is queued while the bus is suspended. Host-side alternative: disable autosuspend
+until the port is reopened. `usbWaker` (`cmd/picoDevice/usbwake.go`), a hook of the log drainer,
+holds output back and signals the wakeup whenever output is pending while the bus is suspended. Host-side alternative: disable autosuspend
 for the Pico, e.g. with a udev rule
 `ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="000a", TEST=="power/control", ATTR{power/control}="on"`.
 

@@ -19,6 +19,10 @@ type Drainer struct {
 	// Ready reports whether anyone is listening on Dst. While it returns false
 	// the ring is discarded instead of drained. Nil means always ready.
 	Ready func() bool
+	// Writable is consulted only while output is pending. Returning false
+	// keeps the output buffered and retries after Idle; the hook can use that
+	// to wake Dst up, e.g. signal USB remote wakeup. Nil means always writable.
+	Writable func() bool
 	// Chunk is the maximum number of bytes per Dst.Write; 0 means 64, one
 	// USB full-speed bulk packet.
 	Chunk int
@@ -36,9 +40,18 @@ type Drainer struct {
 func (d *Drainer) Step() int {
 	if d.Ready != nil && !d.Ready() {
 		d.Src.Reset()
+		d.midLine = false
 		return 0
 	}
-	if dropped := d.Src.Dropped(); dropped != d.reported && !d.midLine {
+	dropped := d.Src.Dropped()
+	report := dropped != d.reported && !d.midLine
+	if !report && d.Src.Buffered() == 0 {
+		return 0
+	}
+	if d.Writable != nil && !d.Writable() {
+		return 0
+	}
+	if report {
 		d.reported = dropped
 		m := append(d.marker[:0], "logkit: dropped="...)
 		m = strconv.AppendUint(m, dropped, 10)
@@ -51,27 +64,43 @@ func (d *Drainer) Step() int {
 		chunk = defaultChunk
 	}
 	p := d.Src.Peek(chunk)
-	if len(p) == 0 {
-		return 0
-	}
 	n, err := d.Dst.Write(p)
 	if err != nil {
 		n = len(p)
 	}
-	d.midLine = p[n-1] != '\n'
-	d.Src.Discard(n)
+	if n > 0 {
+		d.midLine = p[n-1] != '\n'
+		d.Src.Discard(n)
+	}
 	return n
 }
 
 // Run calls Step forever, sleeping for Idle whenever Step had nothing to do.
 func (d *Drainer) Run() {
-	idle := d.Idle
-	if idle <= 0 {
-		idle = defaultIdle
-	}
+	idle := d.idle()
 	for {
 		if d.Step() == 0 {
 			time.Sleep(idle)
 		}
 	}
+}
+
+// Flush waits until Run, running on another goroutine, has handed everything
+// buffered to Dst, or until timeout. It reports whether the ring was emptied.
+func (d *Drainer) Flush(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for d.Src.Buffered() > 0 {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(d.idle())
+	}
+	return true
+}
+
+func (d *Drainer) idle() time.Duration {
+	if d.Idle <= 0 {
+		return defaultIdle
+	}
+	return d.Idle
 }

@@ -27,13 +27,18 @@ const connTimeout = 5 * time.Second
 const tcpbufsize = 2030 // MTU - ethhdr - iphdr - tcphdr
 const pollTime = 5 * time.Millisecond
 
-// logBufSize bounds log memory; records that arrive while it is full are
-// dropped rather than blocking the caller.
-const logBufSize = 4096
+// logBuf bounds log memory; records that arrive while it is full are dropped
+// rather than blocking the caller. At Info level the fill peaks at ~350 B
+// (the startup burst), so 1 KiB leaves about 3x headroom.
+var logBuf [1024]byte
+
+const logFlushTimeout = 2 * time.Second
 
 func main() {
-	logRing := initLogRing()
+	logDrainer := initLogDrainer()
+	logRing := logDrainer.Src
 	logger := newLogger(logRing, slog.LevelInfo)
+	defer flushLogOnPanic(logger, logDrainer)
 	time.Sleep(5 * time.Second)
 	logger.Info("tiny-dash picoDevice Starting...")
 
@@ -119,16 +124,31 @@ func main() {
 	}
 }
 
-// initLogRing returns a ring buffer drained to serial by its own goroutine:
-// TinyGo's USB-CDC Write spins until the host reads, so writing to
+// initLogDrainer returns a ring buffer drainer to serial running on its own
+// goroutine: TinyGo's USB-CDC Write spins until the host reads, so writing to
 // machine.Serial directly can stall any goroutine that logs, including the
 // network and display paths. Dropped bytes are reported by the drainer itself.
-func initLogRing() *logkit.RingWriter {
-	ring := logkit.NewRingWriter(make([]byte, logBufSize))
-	drainer := &logkit.Drainer{Src: ring, Dst: machine.Serial, Ready: machine.Serial.DTR}
+func initLogDrainer() *logkit.Drainer {
+	drainer := &logkit.Drainer{
+		Src:      logkit.NewRingWriter(logBuf[:]),
+		Dst:      machine.Serial,
+		Ready:    machine.Serial.DTR,
+		Writable: (&usbWaker{}).Writable,
+	}
 	go drainer.Run()
-	go keepUSBHostAwake()
-	return ring
+	return drainer
+}
+
+// flushLogOnPanic routes a panic in main through the log ring before letting
+// it continue. The runtime prints the panic straight to machine.Serial and
+// then halts the scheduler, so records still in the ring would be lost and,
+// with the bus suspended, nothing would wake the host to deliver the message.
+func flushLogOnPanic(logger *slog.Logger, drainer *logkit.Drainer) {
+	if r := recover(); r != nil {
+		logger.Error("panic", "error", r)
+		drainer.Flush(logFlushTimeout)
+		panic(r)
+	}
 }
 
 // newLogger writes to ring. Every record costs heap allocations in the
