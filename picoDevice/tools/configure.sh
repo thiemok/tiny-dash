@@ -42,6 +42,9 @@ const (
 	RefreshInterval = $REFRESH_INTERVAL
 	// DNSServer is used only when DHCP offers no DNS server; empty disables it.
 	DNSServer = "${DNS_SERVER:-}"
+	// NTPServer is a host name, resolved via DNS before every sync, or an
+	// IPv4 literal.
+	NTPServer = "${NTP_SERVER:-pool.ntp.org}"
 
 	// Hardware test knobs, read by debug builds only; 0 disables them.
 	// See .env.example.
