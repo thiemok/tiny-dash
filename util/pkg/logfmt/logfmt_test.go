@@ -56,6 +56,34 @@ func TestHandlerTime(t *testing.T) {
 	}
 }
 
+func TestHandlerTimeHook(t *testing.T) {
+	var out bytes.Buffer
+	var wall time.Time
+	h := NewHandler(&out, &Options{Time: func() time.Time { return wall }})
+	l := slog.New(h.WithLevel(slog.LevelInfo))
+	recordTime := time.Unix(5, 0).UTC()
+	r := slog.NewRecord(recordTime, slog.LevelInfo, "boot", 0)
+	if err := l.Handler().Handle(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	wall = time.Date(2026, 10, 20, 9, 30, 1, 250_000_000, time.UTC)
+	r = slog.NewRecord(recordTime, slog.LevelInfo, "synced", 0)
+	if err := l.Handler().Handle(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	want := "time=1970-01-01T00:00:05.000Z level=INFO msg=boot\n" +
+		"time=2026-10-20T09:30:01.250Z level=INFO msg=synced\n"
+	if got := out.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	out.Reset()
+	NewHandler(&out, &Options{OmitTime: true, Time: func() time.Time { return wall }}).Handle(context.Background(), r)
+	if got := out.String(); got != "level=INFO msg=synced\n" {
+		t.Errorf("OmitTime with a Time hook: got %q", got)
+	}
+}
+
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
@@ -76,5 +104,18 @@ func TestHandlerLogAttrsDoesNotAllocate(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Errorf("LogAttrs allocated %v times per run, want 0", allocs)
+	}
+}
+
+func TestHandlerTimeHookDoesNotAllocate(t *testing.T) {
+	wall := time.Date(2026, 10, 20, 9, 30, 1, 0, time.UTC)
+	l := slog.New(NewHandler(discard{}, &Options{Time: func() time.Time { return wall }}))
+	ctx := context.Background()
+	allocs := testing.AllocsPerRun(100, func() {
+		l.LogAttrs(ctx, slog.LevelInfo, "cycle", slog.Int("n", 12))
+		wall = wall.Add(time.Second)
+	})
+	if allocs != 0 {
+		t.Errorf("LogAttrs with a Time hook allocated %v times per run, want 0", allocs)
 	}
 }
