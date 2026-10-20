@@ -91,9 +91,10 @@ receive buffer, as the DNS lookups do.
   as `1970-01-01T...`.
 - The clock re-syncs every 12 h and after every WiFi reconnect. A re-sync that moves it by
   more than 10 s logs `large clock step on re-sync`.
-- A failed sync logs `ntp sync failed` with the stage and is retried at the start of a
-  later refresh cycle, backing off from 30 s to 15 min. Plain-HTTP fetches carry on
-  meanwhile; until the first success the clock reports not synced (`Clock.Synced`,
+- A failed sync logs `ntp sync failed` with the stage (debug builds add its heap
+  allocations) and is
+  retried at the start of a later refresh cycle, backing off from 30 s to 15 min.
+  Plain-HTTP fetches carry on meanwhile; until the first success the clock reports not synced (`Clock.Synced`,
   and `Clock.Nanotime` returns 0, so certificate checks fail closed).
 - The build time is the clock's floor: `tools/build.sh` and the `upload` target pass
   `-ldflags "-X main.buildUnix=$(date -u +%s)"`, and no NTP answer can set the clock earlier.

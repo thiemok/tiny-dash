@@ -40,19 +40,19 @@ var ntpRetry = backoff.Exponential{Min: 30 * time.Second, Max: 15 * time.Minute}
 // any time before it.
 var buildUnix string
 
-// fallbackFloor is the clock's floor in builds without buildUnix.
-var fallbackFloor = time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+// fallbackFloorUnix is the clock's floor in builds without buildUnix,
+// 2026-10-20T00:00:00Z. A constant, unlike a time.Date variable, costs no RAM
+// and no init code.
+const fallbackFloorUnix = 1792454400
 
 func newClock() (clock *wallclock.Clock, fromBuild bool) {
-	floor := fallbackFloor
+	floor := int64(fallbackFloorUnix)
 	sec, err := strconv.ParseInt(buildUnix, 10, 64)
-	if fromBuild = err == nil && sec > floor.Unix(); fromBuild {
-		floor = time.Unix(sec, 0)
+	if fromBuild = err == nil && sec > floor; fromBuild {
+		floor = sec
 	}
-	return wallclock.New(nanotime, floor), fromBuild
+	return wallclock.New(nanotime, time.Unix(floor, 0)), fromBuild
 }
-
-var errNTPServerNotIPv4 = errors.New("lneto talks NTP over IPv4 only")
 
 // timeSync keeps clock synced with config.NTPServer. It takes turns with the
 // DNS lookups on the shared udpConn and its borrowed buffer, so a sync costs
@@ -94,7 +94,7 @@ func newTimeSync(logger *slog.Logger, link *wifiLink, u *udpConn, clock *wallclo
 	}
 	if addr, err := netip.ParseAddr(t.host); err == nil {
 		if !addr.Is4() {
-			return nil, errNTPServerNotIPv4
+			return nil, errors.New("lneto talks NTP over IPv4 only")
 		}
 		t.static = addr
 	} else {
@@ -139,18 +139,28 @@ func (t *timeSync) syncIfDue() bool {
 	wasSynced := t.clock.Synced()
 	ctx := context.Background()
 	res, step, stage, err := t.sync()
-	if err != nil {
-		wait := t.sched.Failed(now, rand32())
-		t.logger.LogAttrs(ctx, slog.LevelWarn, "ntp sync failed",
-			slog.String("stage", stage), slog.Any("error", err),
-			slog.Uint64("failures", uint64(t.sched.Failures())),
-			slog.Duration("retryIn", wait), slog.Bool("synced", wasSynced))
-		return true
-	}
-	t.sched.Succeeded(now)
 	if debugBuild {
 		runtime.ReadMemStats(&after)
 	}
+	if err != nil {
+		wait := t.sched.Failed(now, rand32())
+		// Whether the clock still runs on an earlier offset shows in this
+		// line's time, which stays at 1970 until the first success.
+		if debugBuild {
+			t.logger.LogAttrs(ctx, slog.LevelWarn, "ntp sync failed",
+				slog.String("stage", stage), slog.Any("error", err),
+				slog.Uint64("failures", uint64(t.sched.Failures())),
+				slog.Duration("retryIn", wait),
+				slog.Uint64("mallocs", after.Mallocs-before.Mallocs))
+		} else {
+			t.logger.LogAttrs(ctx, slog.LevelWarn, "ntp sync failed",
+				slog.String("stage", stage), slog.Any("error", err),
+				slog.Uint64("failures", uint64(t.sched.Failures())),
+				slog.Duration("retryIn", wait))
+		}
+		return true
+	}
+	t.sched.Succeeded(now)
 	// offset is how far the clock moved; before the first sync the clock
 	// counts from the Unix epoch at boot. This line's time is already synced.
 	if debugBuild {
@@ -187,6 +197,10 @@ func (t *timeSync) sync() (res ntpquery.Result, step time.Duration, stage string
 		slog.String("ip", bytesString(server.AppendTo(t.ipbuf[:0]))),
 		slog.Bool("dns", t.dns != nil))
 
+	// The lookup's registration cannot be re-targeted at the NTP server:
+	// lneto v0.3.2 has no way to change an open conn's remote port, and a
+	// fresh Open or Configure invalidates the registration. So a sync with a
+	// lookup costs two DialUDPs, 6 mallocs / 40 B.
 	if err = t.udp.acquire(t.cfg); err != nil {
 		return res, 0, "conn configure", err
 	}
