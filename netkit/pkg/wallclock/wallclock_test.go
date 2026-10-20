@@ -101,9 +101,13 @@ func TestSetRefusesTimeBeforeFloor(t *testing.T) {
 func TestReadsDoNotAllocate(t *testing.T) {
 	m := &fakeMono{}
 	c := New(m.now, floor)
+	unsynced := New(m.now, floor)
 	wall := floor.Add(time.Hour)
 	allocs := testing.AllocsPerRun(100, func() {
 		m.ns++
+		unsynced.Now()
+		unsynced.Nanotime()
+		unsynced.Set(floor.Add(-time.Second), m.ns)
 		c.Now()
 		c.Nanotime()
 		c.Set(wall, m.ns)

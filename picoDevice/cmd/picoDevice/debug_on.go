@@ -14,4 +14,6 @@ const (
 	wifiTestFailJoins        = config.WifiTestFailJoins
 	wifiTestOutageAfterCycle = config.WifiTestOutageAfterCycle
 	wifiTestOutageFailJoins  = config.WifiTestOutageFailJoins
+	ntpTestSyncInterval      = config.NTPTestSyncInterval
+	memTestGC                = config.MemTestGC
 )

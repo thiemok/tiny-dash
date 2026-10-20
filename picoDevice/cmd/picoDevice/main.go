@@ -120,10 +120,12 @@ func main() {
 	lstack := &link.stack
 	req := buildHTTPRequest(requestURI, apiURL)
 	rxShare := bufshare.New(make([]byte, rxBufSize))
+	udpc, err := newUDPConn(rxShare)
+	util.RequireNoError(err, "configuring the UDP conn")
 	f := &fetcher{
 		lstack:   lstack,
 		rstack:   lstack.StackRetrying(pollBackoff),
-		resolver: newResolver(logger, apiURL, link, rxShare),
+		resolver: newResolver(logger, apiURL, link, udpc),
 		port:     apiURL.Port,
 		req:      req,
 		hdrBuf:   make([]byte, 0, headerBufSize),
@@ -135,7 +137,7 @@ func main() {
 		retryBackoff: backoff.Exponential{Min: 500 * time.Millisecond, Max: 2 * time.Second},
 	}
 	f.rxUser = bufshare.User{Name: "fetch conn", Idle: f.connIdle}
-	ntpSync, err := newTimeSync(logger, link, rxShare, clock)
+	ntpSync, err := newTimeSync(logger, link, udpc, clock)
 	if err != nil {
 		logger.Error("invalid NTP_SERVER", "server", config.NTPServer, "error", err)
 	}
@@ -197,6 +199,10 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)))
 		}
 
+		if memTestGC {
+			// Leaves only live objects in heapAlloc, so a leak shows as growth.
+			runtime.GC()
+		}
 		if debugBuild {
 			runtime.ReadMemStats(&cur)
 			// At most five attrs: slog.Record heap-allocates beyond its inline array.
@@ -334,16 +340,17 @@ func parseDNSServer(logger *slog.Logger) netip.Addr {
 // newResolver skips DNS for IP literals so local dev sessions work without a
 // DNS server.
 //
-// DNS lookups share rxShare, the fetch conn's receive buffer, saving ~1.1 KB:
-// fetch resolves the host before it opens that conn, and aborts the conn on
-// every return, so after Abort lneto no longer writes into the buffer (see
-// fetcher.connIdle). Each conn acquires the buffer before configuring it, and
-// that fails rather than overlap while the other conn is still open.
-func newResolver(logger *slog.Logger, apiURL apiurl.URL, link *wifiLink, rxShare *bufshare.Buffer) *resolve.Resolver {
+// DNS lookups run on udpc, which borrows the fetch conn's receive buffer,
+// saving ~1.1 KB: fetch resolves the host before it opens that conn, and
+// aborts the conn on every return, so after Abort lneto no longer writes into
+// the buffer (see fetcher.connIdle). Each conn acquires the buffer before
+// configuring it, and that fails rather than overlap while the other conn is
+// still open.
+func newResolver(logger *slog.Logger, apiURL apiurl.URL, link *wifiLink, udpc *udpConn) *resolve.Resolver {
 	if apiURL.IsIPLiteral() {
 		return resolve.Static(apiURL.Addr)
 	}
-	d, err := newDNSLookup(apiURL.Host, link, rxShare)
+	d, err := newDNSLookup(apiURL.Host, link, udpc)
 	if err != nil {
 		logger.Error("invalid API_URL host", "host", apiURL.Host, "error", err)
 	}

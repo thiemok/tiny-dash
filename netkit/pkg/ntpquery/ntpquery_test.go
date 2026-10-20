@@ -160,12 +160,19 @@ func TestExchangeDoesNotAllocate(t *testing.T) {
 	buf := make([]byte, 0, Size)
 	resp := response(t, nonce, serverTime, serverTime.Add(time.Millisecond))
 	other := response(t, nonce+1, serverTime, serverTime.Add(time.Millisecond))
+	kod := response(t, nonce, serverTime, serverTime.Add(time.Millisecond))
+	kod[1] = 0
+	unsynced := response(t, nonce, serverTime, serverTime.Add(time.Millisecond))
+	unsynced[0] |= 3 << 6
+	recv := int64(20 * time.Millisecond)
 	allocs := testing.AllocsPerRun(100, func() {
 		AppendRequest(buf[:0], nonce)
-		if _, err := ParseResponse(resp, nonce, 0, int64(20*time.Millisecond)); err != nil {
+		if _, err := ParseResponse(resp, nonce, 0, recv); err != nil {
 			t.Fatal(err)
 		}
-		ParseResponse(other, nonce, 0, int64(20*time.Millisecond))
+		ParseResponse(other, nonce, 0, recv)
+		ParseResponse(kod, nonce, 0, recv)
+		ParseResponse(unsynced, nonce, 0, recv)
 	})
 	if allocs != 0 {
 		t.Errorf("exchange allocated %v times per run", allocs)

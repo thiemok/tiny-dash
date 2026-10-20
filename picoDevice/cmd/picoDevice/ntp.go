@@ -12,7 +12,6 @@ import (
 	"github.com/soypat/lneto/ntp"
 	"github.com/soypat/lneto/udp"
 	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
-	"github.com/thiemok/tiny-dash/netkit/pkg/bufshare"
 	"github.com/thiemok/tiny-dash/netkit/pkg/ntpquery"
 	"github.com/thiemok/tiny-dash/netkit/pkg/timesync"
 	"github.com/thiemok/tiny-dash/netkit/pkg/wallclock"
@@ -55,9 +54,9 @@ func newClock() (clock *wallclock.Clock, fromBuild bool) {
 
 var errNTPServerNotIPv4 = errors.New("lneto talks NTP over IPv4 only")
 
-// timeSync keeps clock synced with config.NTPServer. Like the DNS lookups,
-// its conn borrows the fetch conn's idle receive buffer, so a sync costs no
-// RAM between syncs; it runs between fetches, on the refresh loop.
+// timeSync keeps clock synced with config.NTPServer. It takes turns with the
+// DNS lookups on the shared udpConn and its borrowed buffer, so a sync costs
+// no RAM between syncs; it runs between fetches, on the refresh loop.
 type timeSync struct {
 	link   *wifiLink
 	clock  *wallclock.Clock
@@ -67,26 +66,31 @@ type timeSync struct {
 	host   string
 	static netip.Addr
 	// dns resolves host before every sync, since pool.ntp.org rotates its
-	// servers; it is nil for an IP literal.
+	// servers; it is nil for an IP literal. Caching the address would save
+	// one DialUDP (3 mallocs / 20 B) per sync, but syncs are 12 h apart, far
+	// beyond the pool's TTL, and a retry after a failure should get to try
+	// another server.
 	dns *dnsLookup
 
-	conn  udp.Conn
-	cfg   udp.ConnConfig
-	buf   []byte
-	share *bufshare.Buffer
-	user  bufshare.User
+	udp *udpConn
+	cfg udp.ConnConfig
+	buf []byte
 
 	ipbuf [len("255.255.255.255")]byte
 }
 
-func newTimeSync(logger *slog.Logger, link *wifiLink, share *bufshare.Buffer, clock *wallclock.Clock) (*timeSync, error) {
+func newTimeSync(logger *slog.Logger, link *wifiLink, u *udpConn, clock *wallclock.Clock) (*timeSync, error) {
+	interval := ntpSyncInterval
+	if ntpTestSyncInterval > 0 {
+		interval = time.Duration(ntpTestSyncInterval) * time.Second
+	}
 	t := &timeSync{
 		link:   link,
 		clock:  clock,
-		sched:  timesync.New(timesync.Policy{Interval: ntpSyncInterval, Retry: ntpRetry}),
+		sched:  timesync.New(timesync.Policy{Interval: interval, Retry: ntpRetry}),
 		logger: logger,
 		host:   config.NTPServer,
-		share:  share,
+		udp:    u,
 	}
 	if addr, err := netip.ParseAddr(t.host); err == nil {
 		if !addr.Is4() {
@@ -94,35 +98,27 @@ func newTimeSync(logger *slog.Logger, link *wifiLink, share *bufshare.Buffer, cl
 		}
 		t.static = addr
 	} else {
-		d, err := newDNSLookup(t.host, link, share)
+		d, err := newDNSLookup(t.host, link, u)
 		if err != nil {
 			return nil, err
 		}
 		t.dns = d
 	}
 
-	borrowed := share.Bytes()
+	borrowed := u.share.Bytes()
 	if len(borrowed) < 2*ntpRxBufSize+ntpquery.Size {
 		return nil, errors.New("borrowed NTP buffer too small")
 	}
 	t.cfg = udp.ConnConfig{
 		RxBuf:       borrowed[:ntpRxBufSize:ntpRxBufSize],
 		TxBuf:       borrowed[ntpRxBufSize : ntpRxBufSize+ntpquery.Size : ntpRxBufSize+ntpquery.Size],
-		RxQueueSize: 2,
-		TxQueueSize: 1,
+		RxQueueSize: udpQueueSize,
+		TxQueueSize: udpQueueSize,
 		RWBackoff:   pollBackoff,
 	}
 	end := 2*ntpRxBufSize + ntpquery.Size
 	t.buf = borrowed[ntpRxBufSize+ntpquery.Size : end : end]
-	t.user = bufshare.User{Name: "ntp conn", Idle: t.connIdle}
-	// As in newDNSLookup: grow the conn's queues now rather than in the
-	// first sync, without registering it with the stack.
-	if err := t.conn.Configure(t.cfg); err != nil {
-		return nil, err
-	}
-	err := t.conn.Open(ntp.ClientPort, netip.AddrPortFrom(netip.IPv4Unspecified(), ntp.ServerPort))
-	t.conn.Abort()
-	return t, err
+	return t, nil
 }
 
 // invalidate makes the next syncIfDue sync, e.g. after a WiFi reconnect.
@@ -191,17 +187,10 @@ func (t *timeSync) sync() (res ntpquery.Result, step time.Duration, stage string
 		slog.String("ip", bytesString(server.AppendTo(t.ipbuf[:0]))),
 		slog.Bool("dns", t.dns != nil))
 
-	if err = t.share.Acquire(&t.user); err != nil {
+	if err = t.udp.acquire(t.cfg); err != nil {
 		return res, 0, "conn configure", err
 	}
-	conn := &t.conn
-	if err = conn.Configure(t.cfg); err != nil {
-		return res, 0, "conn configure", err
-	}
-	lstack := &t.link.stack
-	lport := uint16(lstack.Prand32()>>17) + 1024
-	if err = lstack.DialUDP(conn, lport, netip.AddrPortFrom(server, ntp.ServerPort)); err != nil {
-		conn.Abort()
+	if err = t.udp.dial(&t.link.stack, netip.AddrPortFrom(server, ntp.ServerPort)); err != nil {
 		return res, 0, "dial", err
 	}
 	var recv int64
@@ -210,7 +199,7 @@ func (t *timeSync) sync() (res ntpquery.Result, step time.Duration, stage string
 			break
 		}
 	}
-	conn.Abort()
+	t.udp.conn.Abort()
 	if err != nil {
 		return res, 0, "exchange", err
 	}
@@ -220,9 +209,6 @@ func (t *timeSync) sync() (res ntpquery.Result, step time.Duration, stage string
 	}
 	return res, step, "", nil
 }
-
-// connIdle reports whether the conn is aborted, as dnsLookup.connIdle does.
-func (t *timeSync) connIdle() bool { return t.conn.LocalPort() == 0 }
 
 // exchange sends one request and waits ntpTimeout for its answer, skipping
 // datagrams that answer something else. recv is the monotonic time the answer
@@ -234,12 +220,12 @@ func (t *timeSync) exchange() (res ntpquery.Result, recv int64, err error) {
 	nonce := uint64(rand32())<<32 | uint64(rand32())
 	req := ntpquery.AppendRequest(t.buf[:0], nonce)
 	sent := nanotime()
-	if _, err = t.conn.Write(req); err != nil {
+	if _, err = t.udp.conn.Write(req); err != nil {
 		return res, 0, err
 	}
-	t.conn.SetReadDeadline(time.Now().Add(ntpTimeout))
+	t.udp.conn.SetReadDeadline(time.Now().Add(ntpTimeout))
 	for {
-		n, err := t.conn.Read(t.buf[:cap(t.buf)])
+		n, err := t.udp.conn.Read(t.buf[:cap(t.buf)])
 		recv = nanotime()
 		if err != nil {
 			return res, recv, err

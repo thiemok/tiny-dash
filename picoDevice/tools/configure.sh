@@ -51,6 +51,8 @@ const (
 	WifiTestFailJoins        = ${WIFI_TEST_FAIL_JOINS:-0}
 	WifiTestOutageAfterCycle = ${WIFI_TEST_OUTAGE_AFTER_CYCLE:-0}
 	WifiTestOutageFailJoins  = ${WIFI_TEST_OUTAGE_FAIL_JOINS:-0}
+	NTPTestSyncInterval      = ${NTP_TEST_SYNC_INTERVAL:-0}
+	MemTestGC                = ${MEM_TEST_GC:-false}
 )
 EOF
 

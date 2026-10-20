@@ -238,6 +238,17 @@ every join. To see why a join failed, raise the driver logger in `main.go` to In
 join then records `rxEvent` lines whose `status` and `reason` say why (status 3 = no
 network found, 1 = failure).
 
+### Memory test knobs
+
+Like the WiFi test knobs, these only take effect in debug builds
+(`pnpm nx run picoDevice:upload:debug`). The `cycle` line's `mallocs`, `bytes` and `heapAlloc`
+are debug-only too: a release build logs just `n` and `ok`.
+
+- `NTP_TEST_SYNC_INTERVAL=N`: re-sync the clock every N seconds instead of every 12 hours,
+  to exercise the sync path many times in one session.
+- `MEM_TEST_GC=true`: run the GC before each cycle's `runtime.ReadMemStats`, so the
+  `heapAlloc` of the `cycle` line is the live heap and a leak shows as steady growth.
+
 ## Development
 
 ### Dependencies
