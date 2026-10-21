@@ -1,19 +1,24 @@
 package dashboard
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"io/fs"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/thiemok/tiny-dash/api/internal/config"
 	"github.com/thiemok/tiny-dash/api/internal/homeassistant"
 	"github.com/thiemok/tiny-dash/api/internal/render"
+	"github.com/thiemok/tiny-dash/api/internal/telemetry"
 )
 
 // DashboardHandler serves the browser-facing HTML dashboard and HTMX partials.
@@ -62,8 +67,8 @@ type eventView struct {
 	Location string
 	AllDay   bool
 	Ongoing  bool
-	Source   string         // short calendar label
-	Color    template.CSS   // accent color for the calendar source
+	Source   string       // short calendar label
+	Color    template.CSS // accent color for the calendar source
 }
 
 // calendarView holds events for today, grouped for display.
@@ -74,14 +79,14 @@ type calendarView struct {
 
 // departureRow holds a single upcoming departure for the template.
 type departureRow struct {
-	Line          string
-	Direction     string
-	TimeStr       string
-	Minutes       int    // minutes until departure
-	MinutesStr    string // "now", "5 min", "1 h 10"
-	Delay         int    // minutes late (0 = on time)
-	Cancelled     bool
-	Alerts        bool
+	Line       string
+	Direction  string
+	TimeStr    string
+	Minutes    int    // minutes until departure
+	MinutesStr string // "now", "5 min", "1 h 10"
+	Delay      int    // minutes late (0 = on time)
+	Cancelled  bool
+	Alerts     bool
 }
 
 // departuresView holds the list of upcoming departures.
@@ -127,11 +132,11 @@ const (
 
 // templateData holds values passed to the dashboard template.
 type templateData struct {
-	Width    int
-	Height   int
-	Time     string
-	Cells    []hourCell // 24-hour day-curve clock strip
-	Date     string
+	Width        int
+	Height       int
+	Time         string
+	Cells        []hourCell // 24-hour day-curve clock strip
+	Date         string
 	Swatches     []template.CSS
 	ShowSwatches bool
 	Weather      *weatherView
@@ -161,7 +166,7 @@ func hourCells(now time.Time) []hourCell {
 	return cells
 }
 
-func (h *DashboardHandler) newTemplateData(width, height int, palette render.Palette, mock bool) templateData {
+func (h *DashboardHandler) newTemplateData(ctx context.Context, width, height int, palette render.Palette, mock bool) templateData {
 	now := time.Now()
 
 	swatches := make([]template.CSS, len(palette))
@@ -183,9 +188,9 @@ func (h *DashboardHandler) newTemplateData(width, height int, palette render.Pal
 		data.Calendar = mockCalendar(now)
 		data.Departures = mockDepartures(now)
 	} else {
-		data.Weather = h.fetchWeather()
-		data.Calendar = h.fetchCalendar(now)
-		data.Departures = h.fetchDepartures(now)
+		data.Weather = h.fetchWeather(ctx)
+		data.Calendar = h.fetchCalendar(ctx, now)
+		data.Departures = h.fetchDepartures(ctx, now)
 	}
 
 	return data
@@ -207,15 +212,30 @@ func formatMinutesUntil(m int) string {
 	return fmt.Sprintf("%d h %02d", h, rem)
 }
 
-func (h *DashboardHandler) fetchDepartures(now time.Time) *departuresView {
+// startFetch opens the span for one dashboard data source fetch.
+func startFetch(ctx context.Context, source string) (context.Context, trace.Span) {
+	return tracer.Start(ctx, "dashboard.fetch "+source, trace.WithAttributes(attrDataSource.String(source)))
+}
+
+// fetchFailed records a data source failure on the span, the failure counter and the log.
+func fetchFailed(ctx context.Context, span trace.Span, source string, err error) {
+	telemetry.RecordError(span, err)
+	dataSourceFailures.Add(ctx, 1, metric.WithAttributes(attrDataSource.String(source)))
+	slog.WarnContext(ctx, "dashboard data source fetch failed", "datasource", source, "error", err)
+}
+
+func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time) *departuresView {
 	ids := h.config.Departures.EntityIDs
 	if len(ids) == 0 {
 		return nil
 	}
 
-	departures, err := h.haClient.GetUpcomingDepartures(ids, 0)
+	ctx, span := startFetch(ctx, "departures")
+	defer span.End()
+
+	departures, err := h.haClient.GetUpcomingDepartures(ctx, ids, 0)
 	if err != nil {
-		log.Printf("departures fetch error: %v", err)
+		fetchFailed(ctx, span, "departures", err)
 		return nil
 	}
 
@@ -226,13 +246,13 @@ func (h *DashboardHandler) fetchDepartures(now time.Time) *departuresView {
 			t = d.Planned
 		}
 		row := departureRow{
-			Line:       d.Line,
-			Direction:  d.Direction,
-			TimeStr:    t.Format("15:04"),
-			Minutes:    d.MinutesUntil(now),
-			Delay:      d.DelayMinutes(),
-			Cancelled:  d.Cancelled,
-			Alerts:     d.Alerts,
+			Line:      d.Line,
+			Direction: d.Direction,
+			TimeStr:   t.Format("15:04"),
+			Minutes:   d.MinutesUntil(now),
+			Delay:     d.DelayMinutes(),
+			Cancelled: d.Cancelled,
+			Alerts:    d.Alerts,
 		}
 		row.MinutesStr = formatMinutesUntil(row.Minutes)
 		view.Departures = append(view.Departures, row)
@@ -266,15 +286,18 @@ func shortCalendarLabel(entityID string) string {
 	return strings.ToUpper(name[:1]) + name[1:]
 }
 
-func (h *DashboardHandler) fetchCalendar(now time.Time) *calendarView {
+func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time) *calendarView {
 	ids := h.config.Calendar.EntityIDs
 	if len(ids) == 0 {
 		return nil
 	}
 
-	events, err := h.haClient.GetCalendarEventsForToday(ids)
+	ctx, span := startFetch(ctx, "calendar")
+	defer span.End()
+
+	events, err := h.haClient.GetCalendarEventsForToday(ctx, ids)
 	if err != nil {
-		log.Printf("calendar fetch error: %v", err)
+		fetchFailed(ctx, span, "calendar", err)
 		return nil
 	}
 
@@ -308,15 +331,18 @@ func (h *DashboardHandler) fetchCalendar(now time.Time) *calendarView {
 	return view
 }
 
-func (h *DashboardHandler) fetchWeather() *weatherView {
+func (h *DashboardHandler) fetchWeather(ctx context.Context) *weatherView {
 	entityID := h.config.Weather.EntityID
 	if entityID == "" {
 		return nil
 	}
 
-	wd, err := h.haClient.GetWeather(entityID)
+	ctx, span := startFetch(ctx, "weather")
+	defer span.End()
+
+	wd, err := h.haClient.GetWeather(ctx, entityID)
 	if err != nil {
-		log.Printf("weather fetch error: %v", err)
+		fetchFailed(ctx, span, "weather", err)
 		return nil
 	}
 
@@ -391,12 +417,13 @@ func (h *DashboardHandler) parseDashboardParams(r *http.Request) (int, int, rend
 func (h *DashboardHandler) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	width, height, palette := h.parseDashboardParams(r)
 	mock := r.URL.Query().Get("mock") == "1"
-	data := h.newTemplateData(width, height, palette, mock)
+	data := h.newTemplateData(r.Context(), width, height, palette, mock)
 	data.ShowSwatches = r.URL.Query().Get("swatches") == "1"
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {
-		log.Printf("template error: %v", err)
+		telemetry.RecordError(trace.SpanFromContext(r.Context()), err)
+		slog.ErrorContext(r.Context(), "dashboard template failed", "error", err)
 	}
 }
 
@@ -406,7 +433,7 @@ func (h *DashboardHandler) handleClock(w http.ResponseWriter, r *http.Request) {
 	data := templateData{Cells: hourCells(time.Now())}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "clock", data); err != nil {
-		log.Printf("template error: %v", err)
+		telemetry.RecordError(trace.SpanFromContext(r.Context()), err)
+		slog.ErrorContext(r.Context(), "clock template failed", "error", err)
 	}
 }
-

@@ -1,6 +1,15 @@
 # Basic Instructions
 * No obvious comments. Do not add comments that do not add additional details when a block of code is already providing same information via a function name, variable name, or log statement
 
+# Backend observability (OpenTelemetry)
+
+All backend (`api/`) code must be instrumented. Before adding or changing endpoints, outbound calls,
+background work or logging in `api/`, read [`api/docs/observability.md`](api/docs/observability.md)
+and follow it: pass `ctx` everywhere, use the `otelhttp` client transport, name spans
+`<package>.<Function>`, record failures with `telemetry.RecordError`, log only via `slog.*Context`,
+and keep secrets/PII/high-cardinality values out of telemetry. Its "Definition of done" checklist
+applies to every backend change; `pnpm nx run api:test` enforces the static rules.
+
 
 <!-- nx configuration start-->
 <!-- Leave the start & end comments to automatically receive updates. -->

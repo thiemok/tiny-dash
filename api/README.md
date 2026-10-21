@@ -64,6 +64,12 @@ Black and white only:
 Black, white and red:
 <http://localhost:8080/api/dashboard/preview?width=400&height=300&colors=0,1,3>
 
+## Observability
+
+Traces, metrics and logs are exported via OpenTelemetry (OTLP) when `OTEL_EXPORTER_OTLP_ENDPOINT` is set;
+otherwise logs go to stdout only. Conventions, configuration and local verification steps are in
+[docs/observability.md](docs/observability.md).
+
 ## Building
 
 ```sh

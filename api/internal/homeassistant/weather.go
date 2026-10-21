@@ -1,10 +1,15 @@
 package homeassistant
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/thiemok/tiny-dash/api/internal/telemetry"
 )
 
 // WeatherData holds the combined current + forecast weather information.
@@ -55,16 +60,19 @@ type sunAttributes struct {
 }
 
 // GetWeather fetches current weather state and today's forecast from Home Assistant.
-func (c *Client) GetWeather(entityID string) (*WeatherData, error) {
+func (c *Client) GetWeather(ctx context.Context, entityID string) (*WeatherData, error) {
+	ctx, span := tracer.Start(ctx, "homeassistant.GetWeather", trace.WithAttributes(attrEntityID.String(entityID)))
+	defer span.End()
+
 	// Get current conditions from the weather entity state.
-	state, err := c.GetState(entityID)
+	state, err := c.GetState(ctx, entityID)
 	if err != nil {
-		return nil, fmt.Errorf("fetching weather state: %w", err)
+		return nil, telemetry.RecordError(span, fmt.Errorf("fetching weather state: %w", err))
 	}
 
 	var attrs weatherAttributes
 	if err := json.Unmarshal(state.Attributes, &attrs); err != nil {
-		return nil, fmt.Errorf("decoding weather attributes: %w", err)
+		return nil, telemetry.RecordError(span, fmt.Errorf("decoding weather attributes: %w", err))
 	}
 
 	data := &WeatherData{
@@ -73,12 +81,12 @@ func (c *Client) GetWeather(entityID string) (*WeatherData, error) {
 	}
 
 	// Get daily forecast for high/low.
-	forecastResp, err := c.CallService("weather", "get_forecasts", map[string]any{
+	forecastResp, err := c.CallService(ctx, "weather", "get_forecasts", map[string]any{
 		"entity_id": entityID,
 		"type":      "daily",
 	})
 	if err != nil {
-		log.Printf("forecast service call error: %v", err)
+		slog.WarnContext(ctx, "daily forecast fetch failed", "entity_id", entityID, "error", err)
 		return data, nil // return what we have if forecast fails
 	}
 
@@ -92,12 +100,12 @@ func (c *Client) GetWeather(entityID string) (*WeatherData, error) {
 	}
 
 	// Get hourly forecast for upcoming hours (2-hour increments).
-	hourlyResp, err := c.CallService("weather", "get_forecasts", map[string]any{
+	hourlyResp, err := c.CallService(ctx, "weather", "get_forecasts", map[string]any{
 		"entity_id": entityID,
 		"type":      "hourly",
 	})
 	if err != nil {
-		log.Printf("hourly forecast service call error: %v", err)
+		slog.WarnContext(ctx, "hourly forecast fetch failed", "entity_id", entityID, "error", err)
 	} else if raw, ok := hourlyResp[entityID]; ok {
 		var fr forecastServiceResponse
 		if err := json.Unmarshal(raw, &fr); err == nil {
@@ -130,9 +138,9 @@ func (c *Client) GetWeather(entityID string) (*WeatherData, error) {
 	}
 
 	// Get sunrise/sunset from the sun entity (always available in HA).
-	sunState, err := c.GetState("sun.sun")
+	sunState, err := c.GetState(ctx, "sun.sun")
 	if err != nil {
-		log.Printf("sun state error: %v", err)
+		slog.WarnContext(ctx, "sun state fetch failed", "error", err)
 		return data, nil // return what we have if sun fails
 	}
 

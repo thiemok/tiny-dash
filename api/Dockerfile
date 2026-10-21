@@ -13,11 +13,16 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 
+# Reported as the OpenTelemetry service.version; the release workflow passes the released version.
+ARG VERSION=dev
+
 # chromedp is pure Go, so a static binary (CGO disabled) is safe and portable.
 # GOWORK=off ignores any workspace file; the module builds on its own.
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOWORK=off GOOS=linux \
-    go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api
+    go build -trimpath \
+      -ldflags="-s -w -X github.com/thiemok/tiny-dash/api/internal/telemetry.Version=${VERSION}" \
+      -o /out/api ./cmd/api
 
 # ---- runtime stage ------------------------------------------------------------
 # headless-shell ships a minimal headless Chrome purpose-built for chromedp.

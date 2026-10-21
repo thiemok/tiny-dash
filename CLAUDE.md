@@ -45,3 +45,12 @@ fails, kill only the **specific PID/PGID captured from that task** — never by 
 
 For an interactive auto-restart edit loop (rebuilds on save), use `pnpm nx run api:dev` (wgo) and
 stop it with Ctrl-C.
+
+# Backend observability (OpenTelemetry)
+
+All backend (`api/`) code must be instrumented. Before adding or changing endpoints, outbound calls,
+background work or logging in `api/`, read [`api/docs/observability.md`](api/docs/observability.md)
+and follow it: pass `ctx` everywhere, use the `otelhttp` client transport, name spans
+`<package>.<Function>`, record failures with `telemetry.RecordError`, log only via `slog.*Context`,
+and keep secrets/PII/high-cardinality values out of telemetry. Its "Definition of done" checklist
+applies to every backend change; `pnpm nx run api:test` enforces the static rules.

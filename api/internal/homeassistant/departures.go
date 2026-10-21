@@ -1,23 +1,28 @@
 package homeassistant
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/thiemok/tiny-dash/api/internal/telemetry"
 )
 
 // Departure represents a single upcoming departure for a transit line.
 type Departure struct {
-	Line        string
-	Direction   string
-	Planned     time.Time
-	Estimated   time.Time
-	Cancelled   bool
-	Alerts      bool
-	Transport   string
-	HeadSign    string
+	Line      string
+	Direction string
+	Planned   time.Time
+	Estimated time.Time
+	Cancelled bool
+	Alerts    bool
+	Transport string
+	HeadSign  string
 }
 
 // DelayMinutes returns the difference between estimated and planned departure
@@ -58,20 +63,23 @@ type departuresAttributes struct {
 // GetNextDeparturePerSensor returns one row per sensor: the soonest
 // upcoming departure for that sensor. Sensors with no upcoming entry are
 // skipped. Results are sorted by departure time.
-func (c *Client) GetNextDeparturePerSensor(entityIDs []string) ([]Departure, error) {
+func (c *Client) GetNextDeparturePerSensor(ctx context.Context, entityIDs []string) ([]Departure, error) {
+	ctx, span := tracer.Start(ctx, "homeassistant.GetNextDeparturePerSensor")
+	defer span.End()
+
 	now := time.Now()
 	var picks []Departure
 
 	for _, id := range entityIDs {
-		state, err := c.GetState(id)
+		state, err := c.GetState(ctx, id)
 		if err != nil {
-			log.Printf("departures fetch error for %s: %v", id, err)
+			slog.WarnContext(ctx, "departures fetch failed", "entity_id", id, "error", err)
 			continue
 		}
 
 		var attrs departuresAttributes
 		if err := json.Unmarshal(state.Attributes, &attrs); err != nil {
-			log.Printf("departures decode error for %s: %v", id, err)
+			slog.WarnContext(ctx, "departures decode failed", "entity_id", id, "error", err)
 			continue
 		}
 
@@ -120,8 +128,9 @@ func (c *Client) GetNextDeparturePerSensor(entityIDs []string) ([]Departure, err
 		return a.Before(b)
 	})
 
+	span.SetAttributes(attribute.Int("homeassistant.departures.count", len(picks)))
 	if len(picks) == 0 {
-		return nil, fmt.Errorf("no upcoming departures across %d sensors", len(entityIDs))
+		return nil, telemetry.RecordError(span, fmt.Errorf("no upcoming departures across %d sensors", len(entityIDs)))
 	}
 	return picks, nil
 }
@@ -129,20 +138,23 @@ func (c *Client) GetNextDeparturePerSensor(entityIDs []string) ([]Departure, err
 // GetUpcomingDepartures aggregates departures from multiple sensors, filters
 // out past entries, sorts by estimated/planned time, and returns the next
 // `limit` results. Cancelled departures are kept (caller decides how to show).
-func (c *Client) GetUpcomingDepartures(entityIDs []string, limit int) ([]Departure, error) {
+func (c *Client) GetUpcomingDepartures(ctx context.Context, entityIDs []string, limit int) ([]Departure, error) {
+	ctx, span := tracer.Start(ctx, "homeassistant.GetUpcomingDepartures")
+	defer span.End()
+
 	now := time.Now()
 	var all []Departure
 
 	for _, id := range entityIDs {
-		state, err := c.GetState(id)
+		state, err := c.GetState(ctx, id)
 		if err != nil {
-			log.Printf("departures fetch error for %s: %v", id, err)
+			slog.WarnContext(ctx, "departures fetch failed", "entity_id", id, "error", err)
 			continue
 		}
 
 		var attrs departuresAttributes
 		if err := json.Unmarshal(state.Attributes, &attrs); err != nil {
-			log.Printf("departures decode error for %s: %v", id, err)
+			slog.WarnContext(ctx, "departures decode failed", "entity_id", id, "error", err)
 			continue
 		}
 
@@ -188,8 +200,9 @@ func (c *Client) GetUpcomingDepartures(entityIDs []string, limit int) ([]Departu
 	if limit > 0 && len(all) > limit {
 		all = all[:limit]
 	}
+	span.SetAttributes(attribute.Int("homeassistant.departures.count", len(all)))
 	if len(all) == 0 {
-		return nil, fmt.Errorf("no upcoming departures across %d sensors", len(entityIDs))
+		return nil, telemetry.RecordError(span, fmt.Errorf("no upcoming departures across %d sensors", len(entityIDs)))
 	}
 	return all, nil
 }
