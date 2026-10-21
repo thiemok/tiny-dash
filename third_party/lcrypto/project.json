@@ -3,5 +3,27 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "third_party/lcrypto",
-  "targets": {}
+  "targets": {
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "echo 'Vendored: generated files are copied from upstream (README.md).'",
+        "cwd": "third_party/lcrypto"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "GOWORK=off go test ./...",
+        "cwd": "third_party/lcrypto"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "GOWORK=off go vet ./...",
+        "cwd": "third_party/lcrypto"
+      }
+    }
+  }
 }

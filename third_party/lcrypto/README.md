@@ -16,6 +16,7 @@ replace github.com/soypat/lcrypto => ../third_party/lcrypto
 | Commit | `a1194659b688` (`v0.0.0-20260926162243-a1194659b688`) |
 | License | BSD-3-Clause, see [LICENSE](LICENSE) (unchanged from upstream) |
 | Upstream README | [README.upstream.md](README.upstream.md) |
+| Nx project | `lcrypto`: `test` and `lint` run with `GOWORK=off`, since `go.work` lists only top-level modules |
 
 Upstream warns that its `x509` package was LLM-written, not machine-translated from
 the standard library, and it has not been audited.
