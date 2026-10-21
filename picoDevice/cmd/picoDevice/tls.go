@@ -10,6 +10,7 @@ import (
 
 	"github.com/soypat/lcrypto/x509"
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
+	"github.com/thiemok/tiny-dash/netkit/pkg/bufshare"
 	"github.com/thiemok/tiny-dash/netkit/pkg/wallclock"
 	"github.com/thiemok/tiny-dash/tinytls"
 	"github.com/thiemok/tiny-dash/tinytls/drbg"
@@ -42,14 +43,20 @@ var (
 // fetch: tinytls.Conn holds a 16.6 KiB record buffer, as the server sends
 // full 16 KiB records and ignores max_fragment_length, and the Verifier
 // ~19 KiB of parse state. The 8 KiB handshake buffer is borrowed from the
-// framebuffer, which the body overwrites anyway once the handshake is done;
-// only a display smaller than that leaves tinytls to allocate its own.
+// framebuffer through fb, which the body overwrites anyway once the handshake
+// is done: tinytls does not touch it after Handshake returns, and fetch only
+// shows a complete body. A display smaller than that leaves tinytls to
+// allocate its own.
 type tlsClient struct {
 	conn     tinytls.Conn
 	verifier x509.Verifier
 	chain    x509.Chain
 	cfg      tinytls.Config
 	clock    *wallclock.Clock
+
+	fb          *bufshare.Buffer // nil if tinytls owns its handshake buffer.
+	fbUser      bufshare.User
+	handshaking bool
 
 	trng   trng
 	rng    drbg.Reader
@@ -62,7 +69,7 @@ type tlsClient struct {
 // validation against the embedded roots on the wall clock, which reads 0 and
 // so validates nothing until NTP has set it. Without entropy no handshake can
 // be secure, so a TRNG failure halts the device.
-func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock, framebuf []byte) *tlsClient {
+func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock, fb *bufshare.Buffer) *tlsClient {
 	t := &tlsClient{clock: clock}
 	start := time.Now()
 	t.trng.init()
@@ -86,8 +93,10 @@ func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock
 	})
 	util.RequireNoError(err, "configuring certificate validation")
 	t.cfg = tinytls.Config{ServerName: apiURL.Host, Rand: &t.rng, Verifier: &t.verifier}
-	if len(framebuf) >= tinytls.HandshakeBufSize {
-		t.cfg.HandshakeBuf = framebuf
+	if len(fb.Bytes()) >= tinytls.HandshakeBufSize {
+		t.fb = fb
+		t.fbUser = bufshare.User{Name: "tls handshake", Idle: t.handshakeIdle}
+		t.cfg.HandshakeBuf = fb.Bytes()
 	}
 	return t
 }
@@ -102,15 +111,25 @@ func (t *tlsClient) handshake(rw io.ReadWriter, setDeadline func(time.Time) erro
 		t.rng.Seed(t.sample[:])
 		clear(t.sample[:])
 	}
+	if t.fb != nil {
+		// Fails while the framebuffer holds an image not yet shown.
+		if err := t.fb.Acquire(&t.fbUser); err != nil {
+			return err
+		}
+	}
 	setDeadline(time.Now().Add(handshakeTimeout))
 	start := time.Now()
+	t.handshaking = true
 	err := t.conn.Handshake(rw, t.cfg)
+	t.handshaking = false
 	t.handshakeTook = time.Since(start)
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return errHandshakeTimeout
 	}
 	return err
 }
+
+func (t *tlsClient) handshakeIdle() bool { return !t.handshaking }
 
 // isVerifyError matches the unwrapped error of tinytls.Conn.Handshake; unlike
 // errors.As, the type assertion does not heap-allocate its target.

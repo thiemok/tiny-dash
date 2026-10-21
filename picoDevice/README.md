@@ -137,7 +137,7 @@ local development and does not link any TLS state into the fetch path.
 - **Timing.** `display updated successfully` logs the `handshake` and `body` times: about
   250 ms and 1.1 s for the 192,000 B image.
 - **Stack.** The handshake runs on the main goroutine. It uses about 4.9 KB of the 8 KB
-  `-stack-size` (`main stack headroom=3284` in a debug build with `MEM_TEST_GC=true`).
+  `-stack-size` (`main stack headroom=3252` in a debug build with `MEM_TEST_GC=true`).
 
 ### Migrating from API_HOST/API_PORT
 

@@ -157,6 +157,8 @@ func (c *Conn) Handshake(rw io.ReadWriter, cfg Config) error {
 	if err == nil {
 		err = c.handshake()
 	}
+	// Nothing after the handshake uses hbuf: post-handshake messages are
+	// skipped as they arrive, and records and alerts live in rbuf and wbuf.
 	c.hbuf = nil
 	if err != nil {
 		return c.fail(err)

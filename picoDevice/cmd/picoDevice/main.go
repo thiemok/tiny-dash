@@ -135,13 +135,15 @@ func main() {
 		rxShare:      rxShare,
 		txBuf:        make([]byte, txBufSize(len(req), apiURL.Scheme == apiurl.SchemeHTTPS)),
 		framebuf:     display.Buffer(),
+		fbShare:      bufshare.New(display.Buffer()),
 		logger:       logger,
 		retryBackoff: backoff.Exponential{Min: 500 * time.Millisecond, Max: 2 * time.Second},
 	}
 	f.rxUser = bufshare.User{Name: "fetch conn", Idle: f.connIdle}
+	f.imageUser = bufshare.User{Name: "image", Idle: f.imageIdle}
 	util.RequireNoError(f.rto.Configure(nanotime), "configuring the retransmission timer")
 	if apiURL.Scheme == apiurl.SchemeHTTPS {
-		f.tls = newTLSClient(logger, apiURL, clock, f.framebuf)
+		f.tls = newTLSClient(logger, apiURL, clock, f.fbShare)
 	}
 	ntpSync, err := newTimeSync(logger, link, udpc, clock)
 	if err != nil {
@@ -197,7 +199,10 @@ func main() {
 			fetchFailures++
 		}
 		ok := err == nil
-		if !ok {
+		if !ok || !f.imageReady {
+			// Only a complete image is ever shown: a failed fetch leaves
+			// framebuf partly written, or holding the TLS handshake's scratch.
+			ok = false
 			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err), slog.Int("failures", fetchFailures))
 		} else if err = display.Update(); err != nil {
 			ok = false
@@ -206,6 +211,7 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)),
 				slog.Duration("handshake", f.handshakeTook()), slog.Duration("body", f.bodyTook))
 		}
+		f.imageReady = false
 
 		if memTestGC {
 			// Leaves only live objects in heapAlloc, so a leak shows as growth.
@@ -406,7 +412,12 @@ type fetcher struct {
 	rxUser   bufshare.User
 	txBuf    []byte
 	framebuf []byte
-	logger   *slog.Logger
+	// fbShare lends framebuf to the TLS handshake as scratch. The image takes
+	// it back for the body and holds it, as imageReady, until it is shown.
+	fbShare    *bufshare.Buffer
+	imageUser  bufshare.User
+	imageReady bool
+	logger     *slog.Logger
 	// rto retransmits the request when its segment is lost. Otherwise lneto
 	// only resends after duplicate ACKs, which a lone request never draws, so
 	// the server would never answer. The conn resets it on every open.
@@ -465,6 +476,7 @@ func nanotime() int64 { return int64(time.Since(bootTime)) }
 // fetch streams the image into framebuf. On failure it returns the failing
 // stage alongside the error so that callers need not wrap it.
 func (f *fetcher) fetch() (stage string, err error) {
+	f.imageReady = false
 	if f.tls != nil && !f.tls.clock.Synced() {
 		return "clock", errClockNotSynced
 	}
@@ -590,6 +602,10 @@ func (f *fetcher) fetch() (stage string, err error) {
 		f.close()
 		return "get body", err
 	}
+	if err = f.fbShare.Acquire(&f.imageUser); err != nil {
+		f.close()
+		return "body read", err
+	}
 	bodyReceived := copy(f.framebuf, initialBody)
 
 	bodyStart := time.Now()
@@ -618,8 +634,13 @@ func (f *fetcher) fetch() (stage string, err error) {
 		return "body read", err
 	}
 
+	f.imageReady = true
 	return "", nil
 }
+
+// imageIdle reports whether framebuf holds no image waiting to be shown, so
+// the TLS handshake may borrow it.
+func (f *fetcher) imageIdle() bool { return !f.imageReady }
 
 // close sends close_notify over an established TLS connection, then closes
 // the TCP conn. Either way the TLS secrets are wiped.
