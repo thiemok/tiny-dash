@@ -16,6 +16,7 @@ var (
 	ErrMessageTooLarge   = errors.New("tinytls: handshake message exceeds buffer")
 	ErrClosed            = errors.New("tinytls: connection closed")
 	ErrUnsupportedUpdate = errors.New("tinytls: KeyUpdate unsupported")
+	ErrShortHandshakeBuf = errors.New("tinytls: Config.HandshakeBuf shorter than HandshakeBufSize")
 )
 
 // AlertError is a protocol violation by the server, answered with this alert.

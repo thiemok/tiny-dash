@@ -75,7 +75,7 @@ func TestReplayDoesNotAllocate(t *testing.T) {
 	var c Conn
 	var s byteStream
 	var rnd countingRand
-	cfg := Config{ServerName: "tiny.test", Rand: &rnd, Verifier: &v}
+	cfg := Config{ServerName: "tiny.test", Rand: &rnd, Verifier: &v, HandshakeBuf: make([]byte, HandshakeBufSize)}
 	body := make([]byte, replayBodySize)
 	var runErr error
 	run := func() {

@@ -4,9 +4,10 @@
 //
 // It implements exactly one suite (TLS_AES_128_GCM_SHA256) and one group
 // (X25519), no PSK or resumption, no HelloRetryRequest, no client certificates
-// and no KeyUpdate. A Conn is about 26 KiB and allocates nothing after its first
-// handshake, so create it once and reuse it with [Conn.Handshake] for every
-// connection.
+// and no KeyUpdate. A Conn is about 21 KiB, plus an 8 KiB handshake buffer that
+// it only needs during [Conn.Handshake] and can borrow from the caller, see
+// [Config.HandshakeBuf]. It allocates nothing after its first handshake, so
+// create it once and reuse it with [Conn.Handshake] for every connection.
 package tinytls
 
 import (
@@ -24,15 +25,19 @@ import (
 const (
 	keyLen   = 16
 	hashSize = sha256.Size
-	// sizeHandshake holds one handshake message: the server's Certificate is the
-	// largest, ~4.5 KB for a Let's Encrypt RSA chain.
-	sizeHandshake = 8192
-	sizeWrite     = 2048 // Outgoing records. Larger writes are split.
+	// sizeWrite holds the largest ClientHello, 427 B with a 253 B ServerName.
+	// Larger writes are split across records.
+	sizeWrite     = 512
 	maxPeerCerts  = 8
 	maxServerName = 253
 	cvContext     = "TLS 1.3, server CertificateVerify"
 	sizeCVMsg     = 64 + len(cvContext) + 1 + hashSize
 )
+
+// HandshakeBufSize is the size of [Config.HandshakeBuf]. It holds one handshake
+// message: the server's Certificate is the largest, ~4.5 KB for a Let's Encrypt
+// RSA chain.
+const HandshakeBufSize = 8192
 
 var helloRetryRandom = [32]byte{
 	0xcf, 0x21, 0xad, 0x74, 0xe5, 0x9a, 0x61, 0x11, 0xbe, 0x1d, 0x8c, 0x02, 0x1e, 0x65, 0xb8, 0x91,
@@ -70,6 +75,11 @@ type Config struct {
 	// encrypted but an active attacker can impersonate the server. It exists for
 	// tests and measurements only.
 	InsecureSkipVerify bool
+	// HandshakeBuf, if not nil, is borrowed as scratch during Handshake and
+	// must hold at least HandshakeBufSize bytes; the Conn does not touch it
+	// once Handshake returns. If nil, the Conn allocates its own on the first
+	// Handshake and keeps it.
+	HandshakeBuf []byte
 }
 
 // Conn is a TLS 1.3 client connection. It is not safe for concurrent use.
@@ -90,8 +100,16 @@ type Conn struct {
 	peerClosed bool
 	app        []byte // Received application data not yet returned by Read, points into rbuf.
 
-	hsOff, hsEnd int // hbuf[hsOff:hsEnd] is handshake data not yet handled.
-	hsKeep       int // hbuf[:hsKeep] is retained across record reads (the Certificate message).
+	hbuf         []byte // Handshake messages, during Handshake only.
+	ownHbuf      []byte // hbuf when Config.HandshakeBuf is nil.
+	hsOff, hsEnd int    // hbuf[hsOff:hsEnd] is handshake data not yet handled.
+	hsKeep       int    // hbuf[:hsKeep] is retained across record reads (the Certificate message).
+
+	// A post-handshake message is skipped as it arrives instead of buffered:
+	// postHdr[:postHdrLen] is its header so far, then postSkip body bytes follow.
+	postHdr    [tlsraw.SizeHeaderHandshake]byte
+	postHdrLen int
+	postSkip   int
 
 	clientHS, serverHS [hashSize]byte
 	clientAP, serverAP [hashSize]byte
@@ -103,7 +121,6 @@ type Conn struct {
 	nameLen            int
 
 	rbuf [tlsraw.MaxRecord]byte
-	hbuf [sizeHandshake]byte
 	wbuf [sizeWrite]byte
 }
 
@@ -120,15 +137,28 @@ func (c *Conn) Handshake(rw io.ReadWriter, cfg Config) error {
 		return ErrNoServerName
 	case len(cfg.ServerName) > maxServerName:
 		return ErrServerName
+	case cfg.HandshakeBuf != nil && len(cfg.HandshakeBuf) < HandshakeBufSize:
+		return ErrShortHandshakeBuf
 	}
 	c.reset()
 	c.nameLen = copy(c.name[:], cfg.ServerName)
 	c.rw = rw
 	c.cfg = cfg
-	if err := c.resetKeySchedule(); err != nil {
-		return err
+	c.cfg.HandshakeBuf = nil
+	if cfg.HandshakeBuf != nil {
+		c.hbuf = cfg.HandshakeBuf[:HandshakeBufSize]
+	} else {
+		if c.ownHbuf == nil {
+			c.ownHbuf = make([]byte, HandshakeBufSize)
+		}
+		c.hbuf = c.ownHbuf
 	}
-	if err := c.handshake(); err != nil {
+	err := c.resetKeySchedule()
+	if err == nil {
+		err = c.handshake()
+	}
+	c.hbuf = nil
+	if err != nil {
 		return c.fail(err)
 	}
 	c.connected = true
@@ -208,6 +238,7 @@ func (c *Conn) reset() {
 	c.Zeroize()
 	c.peerClosed = false
 	c.hsOff, c.hsEnd, c.hsKeep = 0, 0, 0
+	c.postHdrLen, c.postSkip = 0, 0
 	c.chain = certChain{}
 	c.vld.ResetErr()
 }
@@ -543,7 +574,7 @@ func (c *Conn) nextHandshake() ([]byte, error) {
 		return nil, nil
 	}
 	end := tlsraw.SizeHeaderHandshake + uint24(pending[1:])
-	if end > len(c.hbuf)-c.hsKeep {
+	if end > HandshakeBufSize-c.hsKeep {
 		return nil, ErrMessageTooLarge
 	} else if end > len(pending) {
 		return nil, nil
@@ -573,7 +604,7 @@ func (c *Conn) readApp() error {
 	if err != nil {
 		return err
 	}
-	if ct != tlsraw.ContentTypeHandshake && c.hsEnd != c.hsOff {
+	if ct != tlsraw.ContentTypeHandshake && (c.postHdrLen != 0 || c.postSkip != 0) {
 		// RFC 8446 5.1: a message split across records must not be interleaved.
 		return AlertError(tlsraw.AlertUnexpectedMessage)
 	}
@@ -584,33 +615,44 @@ func (c *Conn) readApp() error {
 	case tlsraw.ContentTypeAlert:
 		return c.handleAlert(content)
 	case tlsraw.ContentTypeHandshake:
-		if err = c.addHandshake(content); err != nil {
-			return err
-		}
-		return c.handlePostHandshake()
+		return c.skipPostHandshake(content)
 	}
 	return AlertError(tlsraw.AlertUnexpectedMessage)
 }
 
-// handlePostHandshake drops NewSessionTicket messages, RFC 8446 4.6.1, which
-// may span records; an incomplete one stays buffered.
-func (c *Conn) handlePostHandshake() error {
-	for {
-		msg, err := c.nextHandshake()
-		if err != nil || msg == nil {
-			return err
+// skipPostHandshake drops NewSessionTicket messages, RFC 8446 4.6.1, which
+// may span records; the rest of an incomplete one is skipped from the next.
+func (c *Conn) skipPostHandshake(content []byte) error {
+	if len(content) == 0 {
+		return AlertError(tlsraw.AlertUnexpectedMessage) // RFC 8446 5.1: no zero-length handshake fragments.
+	}
+	for len(content) > 0 {
+		if c.postSkip > 0 {
+			n := min(c.postSkip, len(content))
+			c.postSkip -= n
+			content = content[n:]
+			continue
 		}
-		switch tlsraw.HandshakeType(msg[0]) {
+		n := copy(c.postHdr[c.postHdrLen:], content)
+		c.postHdrLen += n
+		content = content[n:]
+		if c.postHdrLen < len(c.postHdr) {
+			return nil
+		}
+		c.postHdrLen = 0
+		switch tlsraw.HandshakeType(c.postHdr[0]) {
 		case tlsraw.HandshakeTypeNewSessionTicket:
 		case tlsraw.HandshakeTypeKeyUpdate:
 			return ErrUnsupportedUpdate
 		default:
 			return AlertError(tlsraw.AlertUnexpectedMessage)
 		}
-		if c.hsOff == c.hsEnd {
-			c.hsOff, c.hsEnd = 0, 0
+		c.postSkip = uint24(c.postHdr[1:])
+		if tlsraw.SizeHeaderHandshake+c.postSkip > HandshakeBufSize {
+			return ErrMessageTooLarge // As during the handshake, which buffers messages.
 		}
 	}
+	return nil
 }
 
 // readRecord reads one record and returns its content type and content,

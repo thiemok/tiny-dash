@@ -130,7 +130,8 @@ func readAll(t *testing.T, c *Conn) ([]byte, error) {
 
 func TestNewSessionTicketSpansRecords(t *testing.T) {
 	k := newKeyed(t)
-	k.send(t, tlsraw.ContentTypeHandshake, sessionTicket[:7])
+	k.send(t, tlsraw.ContentTypeHandshake, sessionTicket[:2]) // Even the header spans records.
+	k.send(t, tlsraw.ContentTypeHandshake, sessionTicket[2:7])
 	k.send(t, tlsraw.ContentTypeHandshake, sessionTicket[7:200])
 	// The rest of the ticket shares a record with a whole second ticket.
 	k.send(t, tlsraw.ContentTypeHandshake, append(append([]byte(nil), sessionTicket[200:]...), sessionTicket...))
@@ -146,15 +147,17 @@ func TestNewSessionTicketSpansRecords(t *testing.T) {
 }
 
 func TestRejectsInterleavedHandshakeFragment(t *testing.T) {
-	k := newKeyed(t)
-	k.send(t, tlsraw.ContentTypeHandshake, sessionTicket[:100])
-	k.send(t, tlsraw.ContentTypeApplicationData, []byte("data"))
-	k.start()
-	_, err := readAll(t, k.c)
-	if err != AlertError(tlsraw.AlertUnexpectedMessage) {
-		t.Fatalf("got %v, want unexpected_message", err)
+	for _, split := range []int{2, 100} { // Within the header and within the body.
+		k := newKeyed(t)
+		k.send(t, tlsraw.ContentTypeHandshake, sessionTicket[:split])
+		k.send(t, tlsraw.ContentTypeApplicationData, []byte("data"))
+		k.start()
+		_, err := readAll(t, k.c)
+		if err != AlertError(tlsraw.AlertUnexpectedMessage) {
+			t.Fatalf("split %d: got %v, want unexpected_message", split, err)
+		}
+		wantAlertSent(t, k, tlsraw.AlertUnexpectedMessage)
 	}
-	wantAlertSent(t, k, tlsraw.AlertUnexpectedMessage)
 }
 
 func TestPostHandshakeErrors(t *testing.T) {
@@ -166,7 +169,7 @@ func TestPostHandshakeErrors(t *testing.T) {
 	}{
 		{"key update", tlsraw.ContentTypeHandshake, handshakeMsg(tlsraw.HandshakeTypeKeyUpdate, []byte{0}), ErrUnsupportedUpdate},
 		{"finished", tlsraw.ContentTypeHandshake, handshakeMsg(tlsraw.HandshakeTypeFinished, make([]byte, 32)), AlertError(tlsraw.AlertUnexpectedMessage)},
-		{"oversized ticket", tlsraw.ContentTypeHandshake, handshakeMsg(tlsraw.HandshakeTypeNewSessionTicket, make([]byte, sizeHandshake)), ErrMessageTooLarge},
+		{"oversized ticket", tlsraw.ContentTypeHandshake, handshakeMsg(tlsraw.HandshakeTypeNewSessionTicket, make([]byte, HandshakeBufSize)), ErrMessageTooLarge},
 		{"empty handshake record", tlsraw.ContentTypeHandshake, nil, AlertError(tlsraw.AlertUnexpectedMessage)},
 		{"fatal alert", tlsraw.ContentTypeAlert, []byte{2, byte(tlsraw.AlertInternalError)}, PeerAlertError(tlsraw.AlertInternalError)},
 		{"short alert", tlsraw.ContentTypeAlert, []byte{2}, AlertError(tlsraw.AlertDecodeError)},
@@ -218,7 +221,7 @@ func TestRecordLayerErrors(t *testing.T) {
 func TestWriteAndCloseNotify(t *testing.T) {
 	k := newKeyed(t)
 	k.start()
-	big := bytes.Repeat([]byte{0xa5}, 5000) // Split into three records.
+	big := bytes.Repeat([]byte{0xa5}, 1200) // Split into three records.
 	if n, err := k.c.Write(big); err != nil || n != len(big) {
 		t.Fatalf("write: %d, %v", n, err)
 	}
@@ -411,6 +414,7 @@ func TestConfigErrors(t *testing.T) {
 		{"no verifier", Config{ServerName: "a.test", Rand: &countingRand{}}, ErrInsecure},
 		{"no name", Config{Rand: &countingRand{}, Verifier: v}, ErrNoServerName},
 		{"long name", Config{ServerName: long, Rand: &countingRand{}, Verifier: v}, ErrServerName},
+		{"short handshake buffer", Config{ServerName: "a.test", Rand: &countingRand{}, Verifier: v, HandshakeBuf: make([]byte, HandshakeBufSize-1)}, ErrShortHandshakeBuf},
 	} {
 		var c Conn
 		if err := c.Handshake(nil, tc.cfg); err != tc.want {

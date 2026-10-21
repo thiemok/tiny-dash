@@ -40,7 +40,10 @@ var (
 
 // tlsClient is the https state, allocated once at startup and reused by every
 // fetch: tinytls.Conn holds a 16.6 KiB record buffer, as the server sends
-// full 16 KiB records, and the Verifier ~19 KiB of parse state.
+// full 16 KiB records and ignores max_fragment_length, and the Verifier
+// ~19 KiB of parse state. The 8 KiB handshake buffer is borrowed from the
+// framebuffer, which the body overwrites anyway once the handshake is done;
+// only a display smaller than that leaves tinytls to allocate its own.
 type tlsClient struct {
 	conn     tinytls.Conn
 	verifier x509.Verifier
@@ -59,7 +62,7 @@ type tlsClient struct {
 // validation against the embedded roots on the wall clock, which reads 0 and
 // so validates nothing until NTP has set it. Without entropy no handshake can
 // be secure, so a TRNG failure halts the device.
-func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock) *tlsClient {
+func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock, framebuf []byte) *tlsClient {
 	t := &tlsClient{clock: clock}
 	start := time.Now()
 	t.trng.init()
@@ -83,6 +86,9 @@ func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock
 	})
 	util.RequireNoError(err, "configuring certificate validation")
 	t.cfg = tinytls.Config{ServerName: apiURL.Host, Rand: &t.rng, Verifier: &t.verifier}
+	if len(framebuf) >= tinytls.HandshakeBufSize {
+		t.cfg.HandshakeBuf = framebuf
+	}
 	return t
 }
 
@@ -106,7 +112,9 @@ func (t *tlsClient) handshake(rw io.ReadWriter, setDeadline func(time.Time) erro
 	return err
 }
 
+// isVerifyError matches the unwrapped error of tinytls.Conn.Handshake; unlike
+// errors.As, the type assertion does not heap-allocate its target.
 func isVerifyError(err error) bool {
-	var ve tinytls.VerifyError
-	return errors.As(err, &ve)
+	_, ok := err.(tinytls.VerifyError)
+	return ok
 }

@@ -141,7 +141,7 @@ func main() {
 	f.rxUser = bufshare.User{Name: "fetch conn", Idle: f.connIdle}
 	util.RequireNoError(f.rto.Configure(nanotime), "configuring the retransmission timer")
 	if apiURL.Scheme == apiurl.SchemeHTTPS {
-		f.tls = newTLSClient(logger, apiURL, clock)
+		f.tls = newTLSClient(logger, apiURL, clock, f.framebuf)
 	}
 	ntpSync, err := newTimeSync(logger, link, udpc, clock)
 	if err != nil {

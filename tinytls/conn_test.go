@@ -318,9 +318,10 @@ func recordFlight(t testing.TB, key crypto.Signer, size int) (flight []byte, v *
 	return rec.got.Bytes(), v
 }
 
-// TestReuseDoesNotAllocate replays a recorded connection on a reused Conn:
-// after the first handshake, a validated handshake, the body and Close
-// allocate nothing.
+// TestReuseDoesNotAllocate replays a recorded connection on a reused Conn
+// with a borrowed handshake buffer: after the first handshake, a validated
+// handshake, the body and Close allocate nothing, and the buffer is left alone
+// once Handshake returns.
 func TestReuseDoesNotAllocate(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -331,7 +332,8 @@ func TestReuseDoesNotAllocate(t *testing.T) {
 	var c Conn
 	var p replay
 	var rnd countingRand
-	cfg := Config{ServerName: testName, Rand: &rnd, Verifier: v}
+	hbuf := make([]byte, HandshakeBufSize)
+	cfg := Config{ServerName: testName, Rand: &rnd, Verifier: v, HandshakeBuf: hbuf}
 	req := []byte("GET / HTTP/1.1\r\n\r\n")
 	body := make([]byte, size)
 	run := func() {
@@ -339,6 +341,9 @@ func TestReuseDoesNotAllocate(t *testing.T) {
 		rnd = countingRand{}
 		if err := c.Handshake(&p, cfg); err != nil {
 			t.Fatal(err)
+		}
+		for i := range hbuf {
+			hbuf[i] = 0xee
 		}
 		if _, err := c.Write(req); err != nil {
 			t.Fatal(err)
@@ -350,8 +355,16 @@ func TestReuseDoesNotAllocate(t *testing.T) {
 			t.Fatalf("got %v, want EOF after close_notify", err)
 		}
 		c.Close()
+		for _, b := range hbuf {
+			if b != 0xee {
+				t.Fatal("HandshakeBuf written after Handshake returned")
+			}
+		}
 	}
 	run()
+	if c.ownHbuf != nil {
+		t.Fatal("Conn allocated a handshake buffer despite Config.HandshakeBuf")
+	}
 	if allocs := testing.AllocsPerRun(5, run); allocs != 0 {
 		t.Fatalf("%v allocations per connection, want 0", allocs)
 	}
