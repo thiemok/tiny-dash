@@ -129,13 +129,15 @@ local development and does not link any TLS state into the fetch path.
   tests enabled (`✓ TRNG seeded the TLS DRBG`) and fed a fresh TRNG sample before every
   handshake.
 - **Teardown.** After every fetch the device sends `close_notify`, wipes the session
-  secrets and closes the TCP conn. The TLS state (49 KB: a 16.6 KB record buffer, as the
-  server sends full 16 KiB records, the handshake buffers, and the certificate verifier) is
-  allocated once at startup and reused, so a fetch does not allocate.
+  secrets and closes the TCP conn. The TLS state (39.5 KB: a 16.6 KB record buffer, as the
+  server sends full 16 KiB records and ignores `max_fragment_length`, and the 19 KB
+  certificate verifier) is allocated once at startup and reused, so a fetch does not
+  allocate. The 8 KB handshake buffer is borrowed from the framebuffer, which the body
+  overwrites anyway.
 - **Timing.** `display updated successfully` logs the `handshake` and `body` times: about
   250 ms and 1.1 s for the 192,000 B image.
 - **Stack.** The handshake runs on the main goroutine. It uses about 4.9 KB of the 8 KB
-  `-stack-size` (`main stack headroom=3300` in a debug build with `MEM_TEST_GC=true`).
+  `-stack-size` (`main stack headroom=3284` in a debug build with `MEM_TEST_GC=true`).
 
 ### Migrating from API_HOST/API_PORT
 
