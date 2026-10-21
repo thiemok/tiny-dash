@@ -183,17 +183,23 @@ func (j *Job) runOnce(ctx context.Context) {
 
 ## Verifying locally
 
+Use [otel-tui](https://github.com/ymtdzzz/otel-tui), a terminal OTLP receiver that shows traces
+(as a waterfall), metrics and logs. It listens on `4317` (gRPC) and `4318` (HTTP).
+
 ```sh
-docker compose -f api/tools/otel-local/compose.yaml up -d      # Collector + Jaeger
+brew install ymtdzzz/tap/otel-tui     # or: go install github.com/ymtdzzz/otel-tui@latest
+otel-tui                              # in a separate terminal
+```
+
+```sh
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=local \
   pnpm nx run api:serve
 curl -fs 'localhost:8080/api/dashboard/image?width=800&height=480&colors=0,1,2,3&colorDepth=4&mock=1' >/dev/null
 ```
 
-- Traces: Jaeger UI at <http://localhost:16686> (service `tiny-dash-api`), or
-  `curl -s 'localhost:16686/api/traces?service=tiny-dash-api&limit=1'`.
-- Metrics and logs: `docker compose -f api/tools/otel-local/compose.yaml logs collector`.
-- Without Docker: `OTEL_TRACES_EXPORTER=console OTEL_METRICS_EXPORTER=none OTEL_LOGS_EXPORTER=none`
-  prints spans to stdout.
-- Tear down with `docker compose -f api/tools/otel-local/compose.yaml down`.
+Check that the image request appears in otel-tui as a single trace with the tree shown above, that
+logs carry its trace ID, and that the `tinydash.*` metrics appear.
+
+Without otel-tui, `OTEL_TRACES_EXPORTER=console OTEL_METRICS_EXPORTER=none OTEL_LOGS_EXPORTER=none`
+prints spans to stdout.
