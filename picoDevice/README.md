@@ -119,7 +119,8 @@ local development and does not link any TLS state into the fetch path.
   against a wrong time: `image fetch failed stage=clock error="wall clock not synced; ..."`.
   The display keeps the last image, and the fetch goes ahead in the first cycle after a sync.
 - **Failures.** A certificate that does not validate logs `image fetch failed stage="tls
-  verify"` with the reason, e.g. `x509: certificate is not valid for the host name`. It
+  verify"` with the reason, e.g. `x509: certificate is not valid for the expected name`
+  or `x509: certificate signed by unknown authority`. It
   is not retried within the cycle and does not count towards a WiFi reconnect. A handshake
   that does not finish within 10 s is retried like a missing response header. Either way
   the display keeps the last image.
@@ -131,7 +132,10 @@ local development and does not link any TLS state into the fetch path.
   secrets and closes the TCP conn. The TLS state (49 KB: a 16.6 KB record buffer, as the
   server sends full 16 KiB records, the handshake buffers, and the certificate verifier) is
   allocated once at startup and reused, so a fetch does not allocate.
-- **Timing.** `display updated successfully` logs the `handshake` and `body` times.
+- **Timing.** `display updated successfully` logs the `handshake` and `body` times: about
+  250 ms and 1.1 s for the 192,000 B image.
+- **Stack.** The handshake runs on the main goroutine. It uses about 4.9 KB of the 8 KB
+  `-stack-size` (`main stack headroom=3300` in a debug build with `MEM_TEST_GC=true`).
 
 ### Migrating from API_HOST/API_PORT
 
