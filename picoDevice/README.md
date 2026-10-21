@@ -36,6 +36,57 @@ The picoDevice application:
    REFRESH_INTERVAL=60
    ```
 
+`.env` is read at build time (`tools/configure.sh` renders it into
+`internal/config/generated.go`), so every change needs a rebuild and re-flash.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `WIFI_SSID`, `WIFI_PASSWORD` | — | WiFi network to join |
+| `API_URL` | — (required) | API base URL, see [API_URL](#api_url) |
+| `REFRESH_INTERVAL` | `60` | Seconds to sleep after each cycle, see [Refresh cadence](#refresh-cadence) |
+| `DNS_SERVER` | unset | IPv4 DNS server, used only if DHCP offers none, see [DNS](#dns) |
+| `NTP_SERVER` | `pool.ntp.org` | NTP host name or IPv4 literal, see [Time (NTP)](#time-ntp) |
+| `NTP_TEST_SYNC_INTERVAL`, `MEM_TEST_GC` | unset | Debug-build test knobs, see [Memory test knobs](#memory-test-knobs) |
+| `WIFI_TEST_*` | unset | Debug-build test knobs, see [WiFi test knobs](#wifi-test-knobs) |
+
+TLS has no knobs: an `https://` URL always validates the certificate against the embedded
+roots (see [HTTPS](#https)).
+
+### Deployed API and local development
+
+The device fetches
+`/api/dashboard/image?width=800&height=480&colorDepth=4&colors=0,1,2,3,5,6` (the query is
+built from the detected display) from `API_URL`. For a deployment (see
+[DEPLOYMENT.md](../DEPLOYMENT.md)), typically https behind a reverse proxy, use its public
+URL. The device resolves the host via the LAN DNS server from DHCP and syncs the clock via
+NTP before the first https request:
+
+```bash
+# picoDevice/.env
+API_URL=https://dashboard.example.com
+```
+
+For local development against `pnpm nx run api:serve` (it listens on `:8080`, plain http),
+point `API_URL` at your machine, by IP or by a host name the LAN DNS resolves (see
+[DNS](#dns); a host name must resolve to an A record directly):
+
+```bash
+# picoDevice/.env
+API_URL=http://192.168.1.100:8080
+# or: API_URL=http://devhost.example.com:8080
+```
+
+Either way the API log shows each fetch as `Received request: /api/dashboard/image?...`
+followed by `Sent 192000 bytes (800x480, depth=4)`. Switching needs a rebuild and re-flash.
+
+### Refresh cadence
+
+`REFRESH_INTERVAL` is the sleep after a cycle, not the cycle period. One cycle is the fetch
+(about 1.5 s over https: the DNS answer is cached, the TLS handshake takes about 0.25 s and
+the 192,000 B body about 1.2 s) plus the e-ink refresh (`display.Update`, about 22 s on the
+7.3" Spectra 6) plus the sleep. With `REFRESH_INTERVAL=60` consecutive requests in the API
+log are about 84 s apart.
+
 ### API_URL
 
 `API_URL` is the base URL of the API server: `scheme://host[:port][/path-prefix]`.
