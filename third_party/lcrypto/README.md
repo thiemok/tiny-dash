@@ -38,11 +38,13 @@ left out (`chacha20_poly1305_*`, `mlkem_768_*`).
    `.data`, so it is copied into RAM at boot and takes 17% of the RP2350's SRAM.
    The patch makes it a `const` string, which stays in flash, and points
    `p256GeneratorTables` at it with `unsafe.StringData`. The table is only ever
-   read. Strings are only byte aligned, and Cortex-M faults on an unaligned 64-bit
-   load, so `init` copies a misaligned table the same way it already did on
-   big-endian hosts. In the picoDevice build the string is 8-byte aligned, so it
-   is not copied. The table is linked because `x509.Verifier` supports ECDSA P-256
-   certificates.
+   read. String data is only guaranteed byte alignment, while the table's
+   `uint64` limbs need native word alignment (a 32-bit target loads each as two
+   words, and Cortex-M's LDRD/LDM fault below 4-byte alignment). So `init` copies
+   a misaligned table to the heap, the same way it already did on big-endian
+   hosts. In the picoDevice build LLVM places the string 4-byte aligned
+   (`nistec$string.19` at `0x100e85e4`), so it is not copied. The table is linked
+   because `x509.Verifier` supports ECDSA P-256 certificates.
 
 ## Re-syncing with upstream
 

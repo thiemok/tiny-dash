@@ -581,11 +581,13 @@ var p256GeneratorTables *[43]p256AffineTable
 
 func init() {
 	// tiny-dash patch: p256PrecomputedEmbed is a string constant so that
-	// TinyGo keeps its 88 KiB in flash instead of copying it to RAM. A string
-	// is only byte aligned, and an unaligned 64-bit load faults on Cortex-M,
-	// so a misaligned table is copied like a big-endian one.
+	// TinyGo keeps its 88 KiB in flash instead of copying it to RAM. Its data
+	// is only guaranteed byte alignment. The table's uint64 limbs need native
+	// word alignment: a 32-bit target loads them as two words (LDRD and LDM
+	// fault on Cortex-M below 4-byte alignment). A misaligned table is copied
+	// like a big-endian one.
 	p256GeneratorTablesPtr := unsafe.Pointer(unsafe.StringData(p256PrecomputedEmbed))
-	if cpu.BigEndian || uintptr(p256GeneratorTablesPtr)%unsafe.Alignof(uint64(0)) != 0 {
+	if cpu.BigEndian || uintptr(p256GeneratorTablesPtr)%unsafe.Alignof(uintptr(0)) != 0 {
 		var newTable [43 * 32 * 2 * 4]uint64
 		for i, x := range (*[43 * 32 * 2 * 4][8]byte)(p256GeneratorTablesPtr) {
 			newTable[i] = byteorder.LEUint64(x[:])
