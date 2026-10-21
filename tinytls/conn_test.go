@@ -37,10 +37,11 @@ type testPKI struct {
 
 func newPKI(t testing.TB, leafKey crypto.Signer, notAfter time.Time) testPKI {
 	t.Helper()
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	return newPKIWithRoot(t, ecKey(t), leafKey, notAfter)
+}
+
+func newPKIWithRoot(t testing.TB, rootKey, leafKey crypto.Signer, notAfter time.Time) testPKI {
+	t.Helper()
 	now := time.Now()
 	rootTmpl := &stdx509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -386,5 +387,45 @@ func TestLive(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(got), "HTTP/1.1 200") || !strings.Contains(string(got), "Hello, World!") {
 		t.Fatalf("unexpected response %q", got)
+	}
+}
+
+// TestWriteReplayFixture records testdata/replay.bin for replay_test.go, which
+// also runs under TinyGo: UPDATE_REPLAY_FIXTURE=1 go test -run TestWriteReplayFixture
+func TestWriteReplayFixture(t *testing.T) {
+	if os.Getenv("UPDATE_REPLAY_FIXTURE") == "" {
+		t.Skip("UPDATE_REPLAY_FIXTURE not set")
+	}
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RSA throughout like the deployed Let's Encrypt chain: lcrypto's ECDSA
+	// verification allocates its curve points.
+	pki := newPKIWithRoot(t, rsaKey, rsaKey, time.Now().Add(time.Hour))
+	at := time.Now()
+	chain := x509.Chain{pki.root}
+	v := verifierFor(t, &chain, func() time.Time { return at })
+	cli, srv := tcpPair(t)
+	errc := make(chan error, 1)
+	go func() { errc <- serve(srv, serverConfig(pki.server), replayBodySize) }()
+	rec := &recorder{Conn: cli}
+	var c Conn
+	if err := c.Handshake(rec, Config{ServerName: testName, Rand: &countingRand{}, Verifier: v}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write(replayRequest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, &c); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	fx := replayFixture{root: pki.root, at: at.UnixNano(), flight: rec.got.Bytes()}
+	if err := os.WriteFile("testdata/replay.bin", fx.marshal(), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
