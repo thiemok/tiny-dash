@@ -18,8 +18,8 @@ func FuzzServerFlight(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	ecFlight, ecVerifier := recordFlight(f, ecKey(f), 1000)
-	rsaFlight, rsaVerifier := recordFlight(f, rsaKey, 1000)
+	ecFlight, ecVerifier := recordFlight(f, ecKey(f), 1000, nil)
+	rsaFlight, rsaVerifier := recordFlight(f, rsaKey, 1000, nil)
 	f.Add(ecFlight, false)
 	f.Add(rsaFlight, true)
 	var c Conn

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/soypat/lcrypto/x509"
 	"github.com/soypat/lneto/crypto/tlsraw"
@@ -290,13 +291,18 @@ func (p *replay) Read(b []byte) (int, error)  { return p.r.Read(b) }
 func (p *replay) Write(b []byte) (int, error) { return len(b), nil }
 
 // recordFlight records a validated handshake and a body of size bytes from a
-// crypto/tls server, made with countingRand.
-func recordFlight(t testing.TB, key crypto.Signer, size int) (flight []byte, v *x509.Verifier) {
+// crypto/tls server, made with countingRand. The Verifier uses scratch if not
+// nil.
+func recordFlight(t testing.TB, key crypto.Signer, size int, scratch *x509.VerifierScratch) (flight []byte, v *x509.Verifier) {
 	t.Helper()
 	pki := newPKI(t, key, time.Now().Add(time.Hour))
 	chain := x509.Chain{pki.root}
 	at := time.Now()
-	v = verifierFor(t, &chain, func() time.Time { return at })
+	v = new(x509.Verifier)
+	err := v.Configure(x509.VerifierConfig{Roots: &chain, Nanotime: at.UnixNano, Scratch: scratch})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cli, srv := tcpPair(t)
 	errc := make(chan error, 1)
 	go func() { errc <- serve(srv, serverConfig(pki.server), size) }()
@@ -319,21 +325,23 @@ func recordFlight(t testing.TB, key crypto.Signer, size int) (flight []byte, v *
 }
 
 // TestReuseDoesNotAllocate replays a recorded connection on a reused Conn
-// with a borrowed handshake buffer: after the first handshake, a validated
-// handshake, the body and Close allocate nothing, and the buffer is left alone
-// once Handshake returns.
+// with a borrowed handshake buffer and, behind it as in picoDevice, the
+// Verifier's scratch: after the first handshake, a validated handshake, the
+// body and Close allocate nothing, and both are left alone once Handshake
+// returns.
 func TestReuseDoesNotAllocate(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const size = 50_000
-	flight, v := recordFlight(t, rsaKey, size)
+	hbuf := make([]byte, HandshakeBufSize+unsafe.Sizeof(x509.VerifierScratch{}))
+	scratch := (*x509.VerifierScratch)(unsafe.Pointer(&hbuf[HandshakeBufSize]))
+	flight, v := recordFlight(t, rsaKey, size, scratch)
 	var c Conn
 	var p replay
 	var rnd countingRand
-	hbuf := make([]byte, HandshakeBufSize)
-	cfg := Config{ServerName: testName, Rand: &rnd, Verifier: v, HandshakeBuf: hbuf}
+	cfg := Config{ServerName: testName, Rand: &rnd, Verifier: v, HandshakeBuf: hbuf[:HandshakeBufSize]}
 	req := []byte("GET / HTTP/1.1\r\n\r\n")
 	body := make([]byte, size)
 	run := func() {
@@ -357,7 +365,7 @@ func TestReuseDoesNotAllocate(t *testing.T) {
 		c.Close()
 		for _, b := range hbuf {
 			if b != 0xee {
-				t.Fatal("HandshakeBuf written after Handshake returned")
+				t.Fatal("HandshakeBuf or the Verifier's scratch written after Handshake returned")
 			}
 		}
 	}

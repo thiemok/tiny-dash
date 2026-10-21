@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"time"
+	"unsafe"
 
 	"github.com/soypat/lcrypto/x509"
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
@@ -41,12 +42,12 @@ var (
 
 // tlsClient is the https state, allocated once at startup and reused by every
 // fetch: tinytls.Conn holds a 16.6 KiB record buffer, as the server sends
-// full 16 KiB records and ignores max_fragment_length, and the Verifier
-// ~19 KiB of parse state. The 8 KiB handshake buffer is borrowed from the
-// framebuffer through fb, which the body overwrites anyway once the handshake
-// is done: tinytls does not touch it after Handshake returns, and fetch only
-// shows a complete body. A display smaller than that leaves tinytls to
-// allocate its own.
+// full 16 KiB records and ignores max_fragment_length. The 8 KiB handshake
+// buffer and, behind it, the Verifier's ~18.4 KiB scratch are borrowed from
+// the framebuffer through fb, which the body overwrites anyway once the
+// handshake is done: neither tinytls nor the Verifier reads them after
+// Handshake returns, and fetch only shows a complete body. A display smaller
+// than that leaves tinytls and the Verifier to allocate their own.
 type tlsClient struct {
 	conn     tinytls.Conn
 	verifier x509.Verifier
@@ -86,19 +87,45 @@ func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock
 		slog.Duration("took", time.Since(start)), slog.Int("healthFailures", t.trng.healthFailures))
 
 	t.chain = roots.ISRG()
-	err := t.verifier.Configure(x509.VerifierConfig{
+	vcfg := x509.VerifierConfig{
 		Roots:              &t.chain,
 		Nanotime:           clock.Nanotime,
 		MaxSignatureChecks: tlsMaxSignatureChecks,
-	})
-	util.RequireNoError(err, "configuring certificate validation")
+	}
 	t.cfg = tinytls.Config{ServerName: apiURL.Host, Rand: &t.rng, Verifier: &t.verifier}
-	if len(fb.Bytes()) >= tinytls.HandshakeBufSize {
+	if vcfg.Scratch = verifierScratch(fb.Bytes()); vcfg.Scratch != nil {
 		t.fb = fb
 		t.fbUser = bufshare.User{Name: "tls handshake", Idle: t.handshakeIdle}
-		t.cfg.HandshakeBuf = fb.Bytes()
+		t.cfg.HandshakeBuf = fb.Bytes()[:tinytls.HandshakeBufSize]
+		// Configure parses the roots in the scratch.
+		util.RequireNoError(t.fb.Acquire(&t.fbUser), "borrowing the framebuffer")
+	} else {
+		logger.Warn("framebuffer too small to lend; TLS allocates its own handshake buffer and verifier scratch", "framebuffer", len(fb.Bytes()))
 	}
+	t.handshaking = true
+	err := t.verifier.Configure(vcfg)
+	t.handshaking = false
+	util.RequireNoError(err, "configuring certificate validation")
 	return t
+}
+
+// verifierScratch places a Verifier's scratch in fb behind the handshake
+// buffer, or returns nil if it does not fit. The scratch's pointers lead only
+// into itself, fb and memory the tlsClient holds, so it does not matter that
+// the GC does not scan fb, a pointer-free []byte.
+func verifierScratch(fb []byte) *x509.VerifierScratch {
+	if len(fb) < tinytls.HandshakeBufSize {
+		return nil
+	}
+	// The heap starts wherever .bss ends, 4-byte aligned, so fb is not always
+	// as aligned as the scratch's uint64s need.
+	const align = unsafe.Alignof(x509.VerifierScratch{})
+	start := uintptr(unsafe.Pointer(&fb[0])) + tinytls.HandshakeBufSize
+	off := tinytls.HandshakeBufSize + (align-start%align)%align
+	if uintptr(len(fb)) < off+unsafe.Sizeof(x509.VerifierScratch{}) {
+		return nil
+	}
+	return (*x509.VerifierScratch)(unsafe.Pointer(&fb[off]))
 }
 
 // handshake runs the TLS handshake over rw, whose deadlines it sets. It mixes
