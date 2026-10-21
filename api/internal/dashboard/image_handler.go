@@ -1,15 +1,23 @@
 package dashboard
 
 import (
+	"context"
 	"fmt"
+	"image"
 	"image/png"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/thiemok/tiny-dash/api/internal/render"
+	"github.com/thiemok/tiny-dash/api/internal/telemetry"
 )
 
 // ImageHandler serves the rendered e-ink image endpoints for picoDevice.
@@ -84,8 +92,29 @@ func (h *ImageHandler) dashboardURL(width, height int, colors string, extra ...s
 	return url
 }
 
+// renderDithered screenshots the dashboard in Chrome and dithers it to the
+// palette, recording the render duration for the given output format.
+func (h *ImageHandler) renderDithered(ctx context.Context, r *http.Request, output string, width, height int, palette render.Palette) (*image.RGBA, error) {
+	start := time.Now()
+	attrs := []attribute.KeyValue{attrRenderOutput.String(output)}
+	defer func() {
+		renderDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+	}()
+
+	url := h.dashboardURL(width, height, r.URL.Query().Get("colors"), "mock", r.URL.Query().Get("mock"))
+	screenshot, err := h.renderer.CaptureURL(ctx, url, width, height, h.settleTime)
+	if err != nil {
+		attrs = append(attrs, semconv.ErrorTypeKey.String("capture"))
+		return nil, err
+	}
+
+	_, span := tracer.Start(ctx, "render.Dither", trace.WithAttributes(attribute.Int("tinydash.render.palette_size", len(palette))))
+	defer span.End()
+	return render.Dither(screenshot, palette), nil
+}
+
 func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received request: %s", r.URL.String())
+	ctx := r.Context()
 
 	width, height, colorDepth, palette, err := h.parseParams(r)
 	if err != nil {
@@ -97,27 +126,26 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	colorsParam := r.URL.Query().Get("colors")
-	mockParam := r.URL.Query().Get("mock")
-	screenshot, err := h.renderer.CaptureURL(h.dashboardURL(width, height, colorsParam, "mock", mockParam), width, height, h.settleTime)
+	dithered, err := h.renderDithered(ctx, r, "packed", width, height, palette)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
-		log.Printf("screenshot error: %v", err)
+		slog.ErrorContext(ctx, "dashboard render failed", "error", err)
 		return
 	}
 
-	dithered := render.Dither(screenshot, palette)
+	_, span := tracer.Start(ctx, "render.PackImage", trace.WithAttributes(attribute.Int("tinydash.render.color_depth", colorDepth)))
 	packed := render.PackImage(dithered, width, height, colorDepth, palette)
+	span.End()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(packed)))
 	w.Write(packed)
 
-	log.Printf("Sent %d bytes (%dx%d, depth=%d)", len(packed), width, height, colorDepth)
+	slog.InfoContext(ctx, "sent packed image", "bytes", len(packed), "width", width, "height", height, "color_depth", colorDepth)
 }
 
 func (h *ImageHandler) handlePreview(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received preview request: %s", r.URL.String())
+	ctx := r.Context()
 
 	width, height, _, palette, err := h.parseParams(r)
 	if err != nil {
@@ -125,19 +153,16 @@ func (h *ImageHandler) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	colorsParam := r.URL.Query().Get("colors")
-	mockParam := r.URL.Query().Get("mock")
-	screenshot, err := h.renderer.CaptureURL(h.dashboardURL(width, height, colorsParam, "mock", mockParam), width, height, h.settleTime)
+	dithered, err := h.renderDithered(ctx, r, "png", width, height, palette)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
-		log.Printf("screenshot error: %v", err)
+		slog.ErrorContext(ctx, "dashboard render failed", "error", err)
 		return
 	}
 
-	dithered := render.Dither(screenshot, palette)
-
 	w.Header().Set("Content-Type", "image/png")
 	if err := png.Encode(w, dithered); err != nil {
-		log.Printf("png encode error: %v", err)
+		telemetry.RecordError(trace.SpanFromContext(ctx), err)
+		slog.ErrorContext(ctx, "png encode failed", "error", err)
 	}
 }

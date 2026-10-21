@@ -45,6 +45,18 @@ secret:
   token: ""
   existingSecret: ""
 
+# OpenTelemetry export of traces, metrics and logs over OTLP (see api/docs/observability.md).
+# Export stays off until `endpoint` is set (or OTEL_* exporter vars arrive via existingSecret).
+otel:
+  # OTLP endpoint, e.g. http://otel-collector.observability:4318 (http/protobuf) or :4317 (grpc).
+  endpoint: ""
+  protocol: http/protobuf
+  # Sets the deployment.environment.name resource attribute, e.g. "production".
+  environment: ""
+  # Secret with extra OTEL_* env vars, e.g. OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>"
+  # for a hosted backend. Its keys are injected verbatim as env vars.
+  existingSecret: ""
+
 # CHROME_PATH is baked into the image; override only if you use a custom image.
 chromePath: ""
 

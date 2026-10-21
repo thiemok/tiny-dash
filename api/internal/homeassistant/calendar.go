@@ -1,9 +1,12 @@
 package homeassistant
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"sort"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // AggregatedEvent enriches a CalendarEvent with its source entity ID and
@@ -20,16 +23,19 @@ type AggregatedEvent struct {
 // GetCalendarEventsForToday fetches events from each given entity covering
 // the current local day, merges them, and returns them sorted by start time.
 // All-day events appear before timed events.
-func (c *Client) GetCalendarEventsForToday(entityIDs []string) ([]AggregatedEvent, error) {
+func (c *Client) GetCalendarEventsForToday(ctx context.Context, entityIDs []string) ([]AggregatedEvent, error) {
+	ctx, span := tracer.Start(ctx, "homeassistant.GetCalendarEventsForToday")
+	defer span.End()
+
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	endOfDay := startOfDay.Add(24 * time.Hour)
 
 	var all []AggregatedEvent
 	for _, id := range entityIDs {
-		events, err := c.GetCalendarEvents(id, startOfDay, endOfDay)
+		events, err := c.GetCalendarEvents(ctx, id, startOfDay, endOfDay)
 		if err != nil {
-			log.Printf("calendar fetch error for %s: %v", id, err)
+			slog.WarnContext(ctx, "calendar fetch failed", "entity_id", id, "error", err)
 			continue
 		}
 		for _, ev := range events {
@@ -65,5 +71,6 @@ func (c *Client) GetCalendarEventsForToday(entityIDs []string) ([]AggregatedEven
 		return all[i].Start.Before(all[j].Start)
 	})
 
+	span.SetAttributes(attribute.Int("homeassistant.calendar.event_count", len(all)))
 	return all, nil
 }

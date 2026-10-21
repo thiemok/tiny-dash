@@ -43,12 +43,32 @@ spec:
             # Injects TINYDASH_HA_TOKEN, which overrides ha.token from the mounted config.yaml.
             - secretRef:
                 name: {{ include "tiny-dash-api.secretName" . }}
+            {{- with .Values.otel.existingSecret }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
           env:
             - name: CONFIG_PATH
               value: /etc/tiny-dash/config.yaml
             {{- with .Values.chromePath }}
             - name: CHROME_PATH
               value: {{ . | quote }}
+            {{- end }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE){{ with .Values.otel.environment }},deployment.environment.name={{ . }}{{ end }}"
+            {{- with .Values.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ $.Values.otel.protocol | quote }}
             {{- end }}
             {{- range $key, $val := .Values.config.extraEnv }}
             - name: {{ $key }}
