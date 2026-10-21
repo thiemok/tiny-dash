@@ -15,6 +15,7 @@ import (
 
 	"github.com/soypat/lneto/http/httpraw"
 	"github.com/soypat/lneto/tcp"
+	"github.com/soypat/lneto/tcp/rto"
 	"github.com/soypat/lneto/x/xnet"
 	"github.com/thiemok/tiny-dash/inky/pkg/adapters"
 	"github.com/thiemok/tiny-dash/inky/pkg/inky"
@@ -34,12 +35,13 @@ const connTimeout = 5 * time.Second
 
 // rxBufSize is the TCP receive window. Linux caps its MSS at half the largest
 // window seen, so a 2030 B window was filled exactly by two 1015 B segments
-// and advertised as zero about 95 times per image. lneto v0.3.2 takes Linux's
-// zero-window probe for a keepalive and does not answer it, so whenever the
-// window update that followed got lost the transfer hung (THI-41). At 4096 B
-// the MSS is 1460 and two full segments leave 1176 B open: the window only
-// closes if Read falls behind, and a lost update to a non-zero window is
-// recovered by Linux's persist timer sending real data, which lneto ACKs.
+// and advertised as zero about 95 times per image. lneto v0.3.2 took Linux's
+// zero-window probe for a keepalive and did not answer it, so whenever the
+// window update that followed got lost the transfer hung (THI-41); lneto
+// #248/#291 answer the probe now. At 4096 B the MSS is 1460 and two full
+// segments leave 1176 B open: the window only closes if Read falls behind,
+// and a lost update to a non-zero window is recovered by Linux's persist
+// timer sending real data, which lneto ACKs.
 const rxBufSize = 4096
 const pollTime = 5 * time.Millisecond
 
@@ -137,6 +139,7 @@ func main() {
 		retryBackoff: backoff.Exponential{Min: 500 * time.Millisecond, Max: 2 * time.Second},
 	}
 	f.rxUser = bufshare.User{Name: "fetch conn", Idle: f.connIdle}
+	util.RequireNoError(f.rto.Configure(nanotime), "configuring the retransmission timer")
 	ntpSync, err := newTimeSync(logger, link, udpc, clock)
 	if err != nil {
 		logger.Error("invalid NTP_SERVER", "server", config.NTPServer, "error", err)
@@ -390,7 +393,7 @@ type fetcher struct {
 	// rto retransmits the request when its segment is lost. Otherwise lneto
 	// only resends after duplicate ACKs, which a lone request never draws, so
 	// the server would never answer. The conn resets it on every open.
-	rto tcp.RTO
+	rto rto.Timer
 
 	retryBackoff backoff.Exponential
 
@@ -441,8 +444,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 		TxBuf:             f.txBuf,
 		TxPacketQueueSize: 3,
 		RWBackoff:         pollBackoff,
-		LossRecovery:      &f.rto,
-		Nanotime:          nanotime,
+		Policy:            &f.rto,
 	})
 	if err != nil {
 		// Configure only fails on a conn that is not closed; abort it so the
@@ -456,7 +458,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 	// under TinyGo, registering the conn stores s.Demux/s.Encapsulate as
 	// bound method values (internet.makecbnode). An on-subnet server adds the
 	// escaping MAC of subnetTable.hwDynamicResolve. Both need upstream fixes.
-	err = f.rstack.DoDialTCP(conn, lport, netip.AddrPortFrom(addr, f.port), connTimeout, 3)
+	err = f.rstack.DoDialTCP(context.Background(), conn, lport, netip.AddrPortFrom(addr, f.port), connTimeout, 3)
 	if err != nil {
 		f.resolver.DialFailed()
 		closeConn(conn)
@@ -606,7 +608,7 @@ func (f *fetcher) resolveServer() (netip.Addr, error) {
 
 // closeConn shuts the read side down before closing so that a server still
 // sending, as after an abandoned body, gets an RST instead of filling a window
-// nobody drains; lneto v0.3.2 has no other way to send one.
+// nobody drains; lneto has no other way to send one.
 func closeConn(conn *tcp.Conn) {
 	conn.CloseRead()
 	conn.Close()

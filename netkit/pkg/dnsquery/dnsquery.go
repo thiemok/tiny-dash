@@ -32,15 +32,15 @@ type Query struct {
 // records of a response are decoded. A non-zero udpSize advertises that
 // receive buffer size through EDNS0.
 func NewA(host string, maxAnswers int, udpSize uint16) (*Query, error) {
-	name, err := dns.NewName(host)
-	if err != nil {
+	var name dns.Name
+	if err := name.Parse(host); err != nil {
 		return nil, err
 	}
 	q := &Query{host: host, name: name}
 	q.req.AddQuestions([]dns.Question{{Name: name, Type: dns.TypeA, Class: dns.ClassINET}})
 	if udpSize > 0 {
-		var opt dns.Resource
-		opt.SetEDNS0(udpSize, 0, 0, nil)
+		// An OPT record carries the UDP payload size in its class, RFC 6891 6.1.2.
+		opt := dns.NewResource(dns.MustNewName("."), dns.TypeOPT, dns.Class(udpSize), 0, nil)
 		q.req.AddAdditionals([]dns.Resource{opt})
 	}
 	q.resp.LimitResourceDecoding(1, uint16(maxAnswers), 0, 0)
