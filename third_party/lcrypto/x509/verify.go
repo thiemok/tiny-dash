@@ -57,9 +57,9 @@ const (
 //
 // The zero Verifier trusts nothing: call [Verifier.Configure] before use. A
 // Verifier is safe for concurrent use: calls, Configure included, are
-// serialized over its working memory. A Verifier is about 19 KiB on 32-bit
-// platforms and 20 KiB on 64-bit ones; declare it as a package variable on
-// devices with small stacks.
+// serialized over its working memory. That memory, a [VerifierScratch], is
+// about 19 KiB on 32-bit platforms and 20 KiB on 64-bit ones; Configure
+// allocates it unless [VerifierConfig.Scratch] lends one.
 type Verifier struct {
 	mu        sync.Mutex
 	roots     lcrypto.CertChain
@@ -68,7 +68,8 @@ type Verifier struct {
 	maxChain  int
 	maxChecks int
 	minRSA    int
-	sc        verifyScratch
+	sc        *verifyScratch
+	scLent    bool // sc is VerifierConfig.Scratch, not allocated by Configure.
 }
 
 // VerifierConfig configures a [Verifier]. The limits bound the work a peer can
@@ -97,6 +98,18 @@ type VerifierConfig struct {
 	// every signing key, from rsa.MinBits to rsa.MaxBits and by default
 	// DefaultMinRSABits. crypto/x509 accepts 1024.
 	MinRSABits int
+	// Scratch is the working memory lent to the Verifier, by default
+	// allocated by Configure. The Verifier clears it at the start of every
+	// call and reads nothing in it after the call returns, so between calls
+	// it may hold anything, e.g. a buffer that is only in use while the
+	// Verifier is not, such as a TLS connection's after its handshake.
+	Scratch *VerifierScratch
+}
+
+// VerifierScratch is a [Verifier]'s working memory, see
+// [VerifierConfig.Scratch].
+type VerifierScratch struct {
+	sc verifyScratch
 }
 
 // Configure checks cfg and makes v verify against it. Every root is parsed
@@ -123,6 +136,14 @@ func (v *Verifier) configure(cfg VerifierConfig) error {
 		cfg.MinRSABits != 0 && (cfg.MinRSABits < rsa.MinBits || cfg.MinRSABits > rsa.MaxBits) {
 		return errLimit
 	}
+	switch {
+	case cfg.Scratch != nil:
+		v.sc = &cfg.Scratch.sc
+	case v.sc == nil || v.scLent:
+		v.sc = new(verifyScratch)
+	}
+	v.scLent = cfg.Scratch != nil
+	v.sc.clear()
 	c := &v.sc.chain[0]
 	for i := range cfg.Roots.NumCerts() {
 		der, err := cfg.Roots.CertView(i)
@@ -154,6 +175,23 @@ type verifyScratch struct {
 	ec384  ecdsa.P384Verifier
 	ed     ed25519.Verifier
 	rsa    rsa.Verifier
+}
+
+// clear zeroes sc field by field: assigning a zero verifyScratch would make
+// TinyGo heap allocate a temporary, as it does for composite literals over
+// 256 bytes.
+func (sc *verifyScratch) clear() {
+	for i := range sc.chain {
+		sc.chain[i] = Certificate{}
+	}
+	sc.next = [MaxChainLen]int{}
+	sc.digest = [64]byte{}
+	sc.d256 = sha256.Digest{}
+	sc.d512 = sha512.Digest{}
+	sc.ec = ecdsa.P256Verifier{}
+	sc.ec384 = ecdsa.P384Verifier{}
+	sc.ed = ed25519.Verifier{}
+	sc.rsa = rsa.Verifier{}
 }
 
 // VerifyPeer implements [lcrypto.Verifier].
@@ -202,6 +240,7 @@ func (v *Verifier) verifyChain(chainView lcrypto.CertChain, usage ExtKeyUsage, n
 	if v.roots == nil {
 		return errNotConfigured
 	}
+	v.sc.clear()
 	nPeer := chainView.NumCerts()
 	if nPeer <= 0 {
 		return errNoCerts
@@ -253,7 +292,7 @@ func (v *Verifier) verifyCertificateVerify(leaf *Certificate, scheme uint16, msg
 }
 
 func (v *Verifier) certificateVerify(leaf *Certificate, scheme uint16, msg, sig []byte) error {
-	sc := &v.sc
+	sc := v.sc
 	switch scheme {
 	case SchemeECDSAP256SHA256:
 		if leaf.PublicKeyAlgorithm != ECDSAP256 {
@@ -315,7 +354,7 @@ func checkValid(c *Certificate, now int64, nowFrac bool) error {
 // the first chain that also passes the checks crypto/x509 Verify applies to
 // whole chains.
 func (v *Verifier) buildChain(peer lcrypto.CertChain, nPeer int, now int64, nowFrac bool, usage ExtKeyUsage) error {
-	sc := &v.sc
+	sc := v.sc
 	nRoots := v.roots.NumCerts()
 	// Verify: a leaf that is itself a root is a chain of one.
 	for i := 0; i < nRoots; i++ {
@@ -491,7 +530,7 @@ func (v *Verifier) checkSignature(c, parent *Certificate) error {
 	if parent.KeyUsage != 0 && parent.KeyUsage&KeyUsageCertSign == 0 {
 		return errConstraint
 	}
-	sc := &v.sc
+	sc := v.sc
 	if c.SignatureAlgorithm == PureEd25519 {
 		if parent.PublicKeyAlgorithm != Ed25519 {
 			return errKeyMismatch

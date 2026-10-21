@@ -52,6 +52,18 @@ left out (`chacha20_poly1305_*`, `mlkem_768_*`).
    84 B on the Pico for a 33-character host name). The patch compares
    bytes instead (`isByte`, `bytesEqual`).
 
+4. **Lendable verifier scratch** (`x509/verify.go`, test `TestLentScratch` in
+   `x509/config_test.go`). Upstream embeds the Verifier's working memory, 18.8 KB
+   on 32-bit targets (the chain being built, the digests and the RSA, ECDSA and
+   Ed25519 verifiers), in `x509.Verifier`, so it stays resident although only a
+   handshake uses it. The patch adds `VerifierConfig.Scratch *VerifierScratch`:
+   the memory is lent by the caller, or allocated by `Configure` when nil, as
+   before. The Verifier clears it at the start of every call, field by field
+   since TinyGo heap-allocates a zero composite literal over 256 bytes, and reads
+   nothing in it after the call, so between calls the caller may use it for
+   something else. picoDevice lends it from its framebuffer, which is idle
+   during the TLS handshake, and saves the 18.8 KB of heap.
+
 ECDSA verification still allocates its curve points (`nistec`, e.g. `new(P256Point)`)
 on every check. That is garbage, not a leak. The Let's Encrypt chain tiny-dash uses
 is RSA throughout, so it does not reach those paths.

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/soypat/lcrypto"
 	lt "github.com/soypat/lcrypto/internal/lcryptotest"
 	lx509 "github.com/soypat/lcrypto/x509"
 )
@@ -210,5 +211,49 @@ func TestAlerts(t *testing.T) {
 	}
 	if alertOf(t, lx509.ErrUnsupported) != alertUnsupportedCertificate {
 		t.Error("ErrUnsupported: want unsupported_certificate")
+	}
+}
+
+// TestLentScratch checks Verifiers sharing a lent VerifierScratch, one call at
+// a time, decide as they do alone, whatever the other left in it.
+func TestLentScratch(t *testing.T) {
+	p := &pki{t: t}
+	rootRSA := p.issue("rsa", "root RSA", true, nil, nil)
+	inter := p.issue("rsa", "inter", true, rootRSA, nil)
+	leafEC := p.issue("ec", "leaf EC", false, inter, nil)
+	rootEd := p.issue("ed25519", "root Ed25519", true, nil, nil)
+	leafEd := p.issue("ed25519", "leaf Ed25519", false, rootEd, nil)
+	scratch := new(lx509.VerifierScratch)
+	a := newVerifier(t, lt.Chain{rootRSA.DER}, lt.Epoch, lx509.VerifierConfig{Scratch: scratch})
+	b := newVerifier(t, lt.Chain{rootEd.DER}, lt.Epoch, lx509.VerifierConfig{Scratch: scratch})
+	name := []byte("example.com")
+	var chainA, chainB lcrypto.CertChain = lt.Chain{leafEC.DER, inter.DER}, lt.Chain{leafEd.DER} // Box once: conversion allocates.
+	verifyA := func() error { return a.VerifyChain(chainA, lx509.ExtKeyUsageServerAuth, name) }
+	verifyB := func() error { return b.VerifyChain(chainB, lx509.ExtKeyUsageServerAuth, name) }
+	for i := range 2 {
+		if err := verifyA(); err != nil {
+			t.Fatalf("round %d: a: %v", i, err)
+		}
+		if err := verifyB(); err != nil {
+			t.Fatalf("round %d: b: %v", i, err)
+		}
+		if err := b.VerifyChain(chainA, lx509.ExtKeyUsageServerAuth, name); err == nil {
+			t.Fatalf("round %d: b accepted a's chain", i)
+		}
+	}
+	noAllocs(t, verifyA)
+	cfg := lx509.VerifierConfig{Roots: lt.Chain{rootRSA.DER}, Nanotime: lt.Epoch.UnixNano, Scratch: scratch}
+	if allocs := testing.AllocsPerRun(1, func() { a.Configure(cfg) }); allocs != 0 {
+		t.Errorf("Configure with a lent scratch allocated %v times", allocs)
+	}
+
+	// Configured without Scratch, a stops using the lent one.
+	cfg.Scratch = nil
+	if err := a.Configure(cfg); err != nil {
+		t.Fatal(err)
+	}
+	*scratch = lx509.VerifierScratch{}
+	if err := verifyA(); err != nil {
+		t.Fatal(err)
 	}
 }
