@@ -45,6 +45,15 @@ left out (`chacha20_poly1305_*`, `mlkem_768_*`).
    hosts. In the picoDevice build LLVM places the string 4-byte aligned
    (`nistec$string.19` at `0x100e85e4`), so it is not copied. The table is linked
    because `x509.Verifier` supports ECDSA P-256 certificates.
+3. **Allocation-free host name checks** (`x509/hostname.go`). TinyGo heap-allocates
+   the conversions in comparisons such as `string(part) == "*"`, which Go optimises
+   away, so `Certificate.VerifyHostname` allocated on every handshake (4 objects,
+   84 B on the Pico for a 33-character host name). The patch compares
+   bytes instead (`isByte`, `bytesEqual`).
+
+ECDSA verification still allocates its curve points (`nistec`, e.g. `new(P256Point)`)
+on every check. That is garbage, not a leak. The Let's Encrypt chain tiny-dash uses
+is RSA throughout, so it does not reach those paths.
 
 ## Re-syncing with upstream
 

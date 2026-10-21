@@ -40,10 +40,28 @@ func (c *Certificate) VerifyHostname(host []byte) error {
 // ipEqual is net.IP.Equal of a 16 byte address and a 4 or 16 byte one.
 func ipEqual(ip16 []byte, other []byte) bool {
 	if len(other) == 4 {
-		return isV4Mapped(ip16) && string(ip16[12:]) == string(other)
+		return isV4Mapped(ip16) && bytesEqual(ip16[12:], other)
 	}
-	return string(ip16) == string(other)
+	return bytesEqual(ip16, other)
 }
+
+// tiny-dash patch: bytesEqual and isByte replace string conversions in
+// comparisons, which TinyGo heap-allocates (84 B per handshake).
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isByte reports whether s is the single byte c.
+func isByte(s []byte, c byte) bool { return len(s) == 1 && s[0] == c }
 
 func lower(c byte) byte {
 	if 'A' <= c && c <= 'Z' {
@@ -87,7 +105,7 @@ func validHostname(host []byte, isPattern bool) bool {
 	if !isPattern {
 		host = trimDot(host)
 	}
-	if len(host) == 0 || string(host) == "*" {
+	if len(host) == 0 || isByte(host, '*') {
 		return false
 	}
 	for i, more := 0, true; more; i++ {
@@ -96,7 +114,7 @@ func validHostname(host []byte, isPattern bool) bool {
 		if len(part) == 0 {
 			return false
 		}
-		if isPattern && i == 0 && string(part) == "*" {
+		if isPattern && i == 0 && isByte(part, '*') {
 			continue
 		}
 		for j, c := range part {
@@ -111,7 +129,7 @@ func validHostname(host []byte, isPattern bool) bool {
 }
 
 func matchExactly(a, b []byte) bool {
-	if len(a) == 0 || string(a) == "." || len(b) == 0 || string(b) == "." {
+	if len(a) == 0 || isByte(a, '.') || len(b) == 0 || isByte(b, '.') {
 		return false
 	}
 	return equalFold(a, b)
@@ -129,7 +147,7 @@ func matchHostnames(pattern, host []byte) bool {
 		var p, h []byte
 		p, pattern, pmore = nextLabel(pattern)
 		h, host, hmore = nextLabel(host)
-		if i == 0 && string(p) == "*" {
+		if i == 0 && isByte(p, '*') {
 			continue
 		}
 		if !equalFold(p, h) {
