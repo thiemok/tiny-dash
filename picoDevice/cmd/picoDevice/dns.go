@@ -46,6 +46,7 @@ func newUDPConn(share *bufshare.Buffer) (*udpConn, error) {
 		RxQueueSize: udpQueueSize,
 		TxQueueSize: udpQueueSize,
 		RWBackoff:   pollBackoff,
+		MTU:         mtu,
 	})
 	if err != nil {
 		return nil, err
@@ -119,6 +120,7 @@ func newDNSLookup(host string, link *wifiLink, u *udpConn) (*dnsLookup, error) {
 			RxQueueSize: udpQueueSize,
 			TxQueueSize: udpQueueSize,
 			RWBackoff:   pollBackoff,
+			MTU:         mtu,
 		},
 		buf: borrowed[dnsBufSize+txLen : 2*dnsBufSize+txLen : 2*dnsBufSize+txLen],
 	}, nil

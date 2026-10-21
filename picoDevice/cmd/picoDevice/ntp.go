@@ -115,6 +115,7 @@ func newTimeSync(logger *slog.Logger, link *wifiLink, u *udpConn, clock *wallclo
 		RxQueueSize: udpQueueSize,
 		TxQueueSize: udpQueueSize,
 		RWBackoff:   pollBackoff,
+		MTU:         mtu,
 	}
 	end := 2*ntpRxBufSize + ntpquery.Size
 	t.buf = borrowed[ntpRxBufSize+ntpquery.Size : end : end]
