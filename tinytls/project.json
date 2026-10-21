@@ -21,7 +21,7 @@
     "test:tinygo": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "tinygo test ./ ./roots",
+        "command": "tinygo test ./...",
         "cwd": "tinytls"
       }
     }
