@@ -5,11 +5,20 @@ TARGET="pico2-w"
 OUTPUT_DIR="dist"
 OUTPUT_FILE="$OUTPUT_DIR/picoDevice.uf2"
 
+# Both modes use these flags, so `tools/build.sh flash` (the upload target)
+# flashes the same firmware that a build produces.
+FLAGS=(-target=$TARGET -scheduler=tasks -stack-size=8kb -opt=2 ${PICO_BUILD_TAGS:+-tags=$PICO_BUILD_TAGS})
+
+if [ "$1" = flash ]; then
+  echo "Flashing picoDevice firmware to Pico 2 W${PICO_BUILD_TAGS:+ (tags: $PICO_BUILD_TAGS)}..."
+  exec tinygo flash "${FLAGS[@]}" ./cmd/picoDevice
+fi
+
 mkdir -p "$OUTPUT_DIR"
 
-echo "Building picoDevice firmware for Raspberry Pi Pico 2 W..."
+echo "Building picoDevice firmware for Raspberry Pi Pico 2 W${PICO_BUILD_TAGS:+ (tags: $PICO_BUILD_TAGS)}..."
 
-tinygo build -target=$TARGET -scheduler=tasks -stack-size=8kb -opt=2 -o $OUTPUT_FILE ./cmd/picoDevice
+tinygo build "${FLAGS[@]}" -o $OUTPUT_FILE ./cmd/picoDevice
 
 echo "✓ picoDevice firmware built: $OUTPUT_FILE"
 echo ""

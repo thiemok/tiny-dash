@@ -51,6 +51,19 @@ bash tools/build.sh
 ```
 
 This creates `dist/picoDevice.uf2` ready for flashing.
+`bash tools/build.sh flash`, which the `upload` target runs, builds with the same
+flags and flashes the result with `tinygo flash`.
+
+### Debug builds
+
+The default build is the release firmware. Measurement and test code (heap
+statistics in the logs, test knobs) only compiles into a debug build, tagged
+`picodebug`:
+
+```bash
+pnpm nx run picoDevice:build:debug   # dist/picoDevice.uf2 with -tags=picodebug
+pnpm nx run picoDevice:upload:debug  # flash a debug build
+```
 
 ## Flashing
 
@@ -119,6 +132,9 @@ Using the Nx workspace:
 ```bash
 # Build firmware
 nx build picoDevice
+
+# Build debug firmware (-tags=picodebug)
+nx run picoDevice:build:debug
 
 # Flash to device (requires device in BOOTSEL mode)
 nx upload picoDevice

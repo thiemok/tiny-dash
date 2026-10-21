@@ -17,13 +17,31 @@
         "command": "bash tools/build.sh",
         "cwd": "picoDevice"
       },
-      "dependsOn": ["configure"]
+      "configurations": {
+        "debug": {
+          "env": { "PICO_BUILD_TAGS": "picodebug" }
+        }
+      },
+      "dependsOn": ["configure"],
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "sha256sum picoDevice/.env 2>/dev/null || echo no-env"
+        }
+      ],
+      "outputs": ["{projectRoot}/dist"]
     },
     "upload": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "tinygo flash -target=pico2-w -scheduler=tasks ./cmd/picoDevice/main.go",
+        "command": "bash tools/build.sh flash",
         "cwd": "picoDevice"
+      },
+      "configurations": {
+        "debug": {
+          "env": { "PICO_BUILD_TAGS": "picodebug" }
+        }
       },
       "dependsOn": ["configure"]
     },
