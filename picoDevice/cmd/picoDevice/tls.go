@@ -72,19 +72,30 @@ type tlsClient struct {
 // be secure, so a TRNG failure halts the device.
 func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock, fb *bufshare.Buffer) *tlsClient {
 	t := &tlsClient{clock: clock}
+	ctx := context.Background()
 	start := time.Now()
 	t.trng.init()
-	for range trngSeedBlocks {
+	for i := range trngSeedBlocks {
+		sampleStart := time.Now()
 		err := t.trng.read(&t.sample)
 		if err != nil {
-			logger.Error("TRNG unusable", "error", err, "healthFailures", t.trng.healthFailures)
+			logger.LogAttrs(ctx, slog.LevelError, "TRNG broken; halting, as TLS needs its entropy",
+				slog.Any("error", err), slog.Int("healthFailures", t.trng.healthFailures),
+				slog.Int("timeouts", t.trng.timeouts), slog.Duration("timeout", t.trng.timeout))
 		}
 		util.RequireNoError(err, "seeding the TLS DRBG from the TRNG")
+		if debugBuild {
+			tries, fails := t.trng.autocorrStats()
+			logger.LogAttrs(ctx, slog.LevelInfo, "TRNG sample", slog.Int("sample", i),
+				slog.Duration("wait", time.Since(sampleStart)),
+				slog.Int("autocorrTries", tries), slog.Int("autocorrFails", fails))
+		}
 		t.rng.Seed(t.sample[:])
 	}
 	clear(t.sample[:])
-	logger.LogAttrs(context.Background(), slog.LevelInfo, "✓ TRNG seeded the TLS DRBG",
-		slog.Duration("took", time.Since(start)), slog.Int("healthFailures", t.trng.healthFailures))
+	logger.LogAttrs(ctx, slog.LevelInfo, "✓ TRNG seeded the TLS DRBG",
+		slog.Duration("took", time.Since(start)), slog.Int("healthFailures", t.trng.healthFailures),
+		slog.Int("timeouts", t.trng.timeouts))
 
 	t.chain = roots.ISRG()
 	vcfg := x509.VerifierConfig{
@@ -134,7 +145,7 @@ func (t *tlsClient) handshake(rw io.ReadWriter, setDeadline func(time.Time) erro
 	if !t.clock.Synced() {
 		return errClockNotSynced
 	}
-	if t.trng.ready() && t.trng.read(&t.sample) == nil {
+	if t.trng.tryRead(&t.sample) {
 		t.rng.Seed(t.sample[:])
 		clear(t.sample[:])
 	}

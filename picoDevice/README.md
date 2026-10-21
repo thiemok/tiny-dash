@@ -126,8 +126,10 @@ local development and does not link any TLS state into the fetch path.
   the display keeps the last image.
 - **Entropy.** TinyGo's `crypto/rand` has no source on the RP2350, so the key shares come
   from `tinytls/drbg` (a SHA-256 DRBG), seeded at boot from the RP2350 TRNG with its health
-  tests enabled (`✓ TRNG seeded the TLS DRBG`) and fed a fresh TRNG sample before every
-  handshake.
+  tests enabled (`✓ TRNG seeded the TLS DRBG`, ~1 s for three 192-bit samples) and fed a
+  fresh TRNG sample before every handshake. A sample that fails a health test or takes
+  more than eight times the expected ~335 ms restarts the TRNG; only a source that keeps
+  failing halts the device (`TRNG broken; halting`), as no handshake is secure without it.
 - **Teardown.** After every fetch the device sends `close_notify`, wipes the session
   secrets and closes the TCP conn. The TLS state (20.7 KB, mostly a 16.6 KB record buffer,
   as the server sends full 16 KiB records and ignores `max_fragment_length`) is allocated
