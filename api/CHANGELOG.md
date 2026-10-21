@@ -1,3 +1,14 @@
+## 0.3.0 (2026-10-21)
+
+### 🚀 Features
+
+- **api:** instrument backend with OpenTelemetry and codify conventions ([#22](https://github.com/thiemok/tiny-dash/pull/22))
+
+### ❤️ Thank You
+
+- Claude Opus 5.5
+- Thiemo
+
 ## 0.2.5 (2026-10-17)
 
 This was a version bump only for api to align it with other projects, there were no code changes.
