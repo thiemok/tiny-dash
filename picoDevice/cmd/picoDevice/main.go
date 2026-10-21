@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"machine"
 	"net/netip"
@@ -125,21 +126,23 @@ func main() {
 	udpc, err := newUDPConn(rxShare)
 	util.RequireNoError(err, "configuring the UDP conn")
 	f := &fetcher{
-		lstack:   lstack,
-		rstack:   lstack.StackRetrying(pollBackoff),
-		resolver: newResolver(logger, apiURL, link, udpc),
-		port:     apiURL.Port,
-		req:      req,
-		hdrBuf:   make([]byte, 0, headerBufSize),
-		rxShare:  rxShare,
-		// The request is the only data ever sent.
-		txBuf:        make([]byte, len(req)),
+		lstack:       lstack,
+		rstack:       lstack.StackRetrying(pollBackoff),
+		resolver:     newResolver(logger, apiURL, link, udpc),
+		port:         apiURL.Port,
+		req:          req,
+		hdrBuf:       make([]byte, 0, headerBufSize),
+		rxShare:      rxShare,
+		txBuf:        make([]byte, txBufSize(len(req), apiURL.Scheme == apiurl.SchemeHTTPS)),
 		framebuf:     display.Buffer(),
 		logger:       logger,
 		retryBackoff: backoff.Exponential{Min: 500 * time.Millisecond, Max: 2 * time.Second},
 	}
 	f.rxUser = bufshare.User{Name: "fetch conn", Idle: f.connIdle}
 	util.RequireNoError(f.rto.Configure(nanotime), "configuring the retransmission timer")
+	if apiURL.Scheme == apiurl.SchemeHTTPS {
+		f.tls = newTLSClient(logger, apiURL, clock)
+	}
 	ntpSync, err := newTimeSync(logger, link, udpc, clock)
 	if err != nil {
 		logger.Error("invalid NTP_SERVER", "server", config.NTPServer, "error", err)
@@ -177,7 +180,8 @@ func main() {
 				runtime.ReadMemStats(&prev)
 			}
 		}
-		// Plain-HTTP fetches go ahead whether or not the clock is synced.
+		// An https fetch waits for a synced clock to validate certificates
+		// against; a plain-HTTP one goes ahead regardless.
 		if ntpSync.syncIfDue() {
 			if debugBuild {
 				// The sync logs its own allocations; keep them out of the cycle's.
@@ -189,7 +193,7 @@ func main() {
 		switch {
 		case err == nil:
 			fetchFailures = 0
-		case err != errHTTPStatus && err != errRedirect:
+		case isNetworkFailure(err):
 			fetchFailures++
 		}
 		ok := err == nil
@@ -199,7 +203,8 @@ func main() {
 			ok = false
 			logger.LogAttrs(ctx, slog.LevelError, "display update failed", slog.Any("error", err))
 		} else {
-			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)))
+			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)),
+				slog.Duration("handshake", f.handshakeTook()), slog.Duration("body", f.bodyTook))
 		}
 
 		if memTestGC {
@@ -219,6 +224,11 @@ func main() {
 			prev = cur
 		} else {
 			logger.LogAttrs(ctx, slog.LevelInfo, "cycle", slog.Int("n", cycle), slog.Bool("ok", ok))
+		}
+		if memTestGC {
+			// The fetch, TLS handshake included, runs on main's stack, the
+			// deepest of the goroutines; this is what -stack-size must cover.
+			logger.LogAttrs(ctx, slog.LevelInfo, "main stack", slog.Uint64("headroom", uint64(stackHeadroom())))
 		}
 
 		if debugBuild && cycle == wifiTestOutageAfterCycle {
@@ -309,14 +319,21 @@ func initDisplay(logger *slog.Logger, apiURL apiurl.URL) (common.Display, string
 
 func pollBackoff(uint) time.Duration { return pollTime }
 
+// txBufSize fits everything the device sends in one go: the request, which
+// is the only data sent over plain HTTP, or with https the ClientHello
+// (207 B with this host, 427 B with a 253 B one) and the request in a TLS
+// record.
+func txBufSize(reqLen int, https bool) int {
+	if !https {
+		return reqLen
+	}
+	return max(reqLen+tlsRecordOverhead, 512)
+}
+
 // parseAPIURL fails before WiFi bring-up so a bad API_URL is reported
 // immediately instead of after a DHCP round trip.
 func parseAPIURL(logger *slog.Logger) apiurl.URL {
 	apiURL, err := apiurl.Parse(config.APIURL)
-	if err == nil && apiURL.Scheme == apiurl.SchemeHTTPS {
-		// TODO(THI-32): TLS client.
-		err = errors.New("https is not supported yet; use an http:// API_URL")
-	}
 	if err != nil {
 		logger.Error("invalid API_URL", "url", config.APIURL, "error", err)
 	}
@@ -397,7 +414,18 @@ type fetcher struct {
 
 	retryBackoff backoff.Exponential
 
+	// tls is nil for a plain-HTTP API_URL.
+	tls      *tlsClient
+	bodyTook time.Duration
+
 	ipbuf [len("255.255.255.255")]byte
+}
+
+func (f *fetcher) handshakeTook() time.Duration {
+	if f.tls == nil {
+		return 0
+	}
+	return f.tls.handshakeTook
 }
 
 // fetchRetrying retries a fetch whose response header never arrived or whose
@@ -418,7 +446,14 @@ func (f *fetcher) fetchRetrying() (stage string, err error) {
 }
 
 func retryable(err error) bool {
-	return err == errHeaderTimeout || err == errBodyStall || err == errIncompleteImage
+	return err == errHeaderTimeout || err == errBodyStall || err == errIncompleteImage || err == errHandshakeTimeout
+}
+
+// isNetworkFailure reports whether err counts towards a WiFi reconnect. The
+// server answering with an error, a certificate that does not validate and an
+// unsynced clock are not cured by reconnecting.
+func isNetworkFailure(err error) bool {
+	return err != errHTTPStatus && err != errRedirect && err != errClockNotSynced && !isVerifyError(err)
 }
 
 var bootTime = time.Now()
@@ -430,6 +465,9 @@ func nanotime() int64 { return int64(time.Since(bootTime)) }
 // fetch streams the image into framebuf. On failure it returns the failing
 // stage alongside the error so that callers need not wrap it.
 func (f *fetcher) fetch() (stage string, err error) {
+	if f.tls != nil && !f.tls.clock.Synced() {
+		return "clock", errClockNotSynced
+	}
 	addr, err := f.resolveServer()
 	if err != nil {
 		return "dns lookup", err
@@ -461,14 +499,29 @@ func (f *fetcher) fetch() (stage string, err error) {
 	err = f.rstack.DoDialTCP(context.Background(), conn, lport, netip.AddrPortFrom(addr, f.port), connTimeout, 3)
 	if err != nil {
 		f.resolver.DialFailed()
-		closeConn(conn)
+		f.close()
 		return "tcp dial", err
 	}
 	f.resolver.DialSucceeded()
 
-	_, err = conn.Write(f.req)
+	// stream carries the HTTP exchange: conn itself, or TLS over it. Its
+	// reads block on conn, so conn's deadlines bound both.
+	var stream io.ReadWriter = conn
+	if f.tls != nil {
+		if err = f.tls.handshake(conn, conn.SetDeadline); err != nil {
+			f.close()
+			if isVerifyError(err) {
+				return "tls verify", err
+			}
+			return "tls handshake", err
+		}
+		conn.SetWriteDeadline(time.Now().Add(headerTimeout))
+		stream = &f.tls.conn
+	}
+
+	_, err = stream.Write(f.req)
 	if err != nil {
-		closeConn(conn)
+		f.close()
 		return "write request", err
 	}
 
@@ -479,15 +532,23 @@ func (f *fetcher) fetch() (stage string, err error) {
 	headerParsed := false
 
 	for time.Now().Before(headerDeadline) {
-		n, readErr := hdr.ReadFromLimited(conn, hdr.BufferFree())
+		n, readErr := hdr.ReadFromLimited(stream, hdr.BufferFree())
 		if readErr == httpraw.ErrBufferExhausted {
-			closeConn(conn)
+			f.close()
+			return "header read", readErr
+		}
+		if f.tls != nil && readErr != nil {
+			// A TLS read error is final: the record stream cannot resume.
+			f.close()
+			if errors.Is(readErr, os.ErrDeadlineExceeded) {
+				readErr = errHeaderTimeout
+			}
 			return "header read", readErr
 		}
 		if n > 0 {
 			needMore, parseErr := hdr.TryParse(true)
 			if parseErr != nil && !needMore {
-				closeConn(conn)
+				f.close()
 				return "header parse", parseErr
 			}
 			if !needMore {
@@ -500,14 +561,14 @@ func (f *fetcher) fetch() (stage string, err error) {
 	}
 
 	if !headerParsed {
-		closeConn(conn)
+		f.close()
 		return "header read", errHeaderTimeout
 	}
 
 	statusCode, statusText := hdr.Status()
 	if len(statusCode) == 3 && statusCode[0] == '3' {
 		location := hdr.GetFold("Location")
-		closeConn(conn)
+		f.close()
 		hint := "check API_URL"
 		if hasPrefixFold(location, "https://") {
 			hint = "server redirected to https; set API_URL scheme to https"
@@ -518,7 +579,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 		return "status", errRedirect
 	}
 	if bytesString(statusCode) != "200" {
-		closeConn(conn)
+		f.close()
 		f.logger.LogAttrs(context.Background(), slog.LevelError, "unexpected HTTP status",
 			slog.String("status", bytesString(statusCode)), slog.String("statusText", bytesString(statusText)))
 		return "status", errHTTPStatus
@@ -526,7 +587,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 
 	initialBody, err := hdr.Body()
 	if err != nil {
-		closeConn(conn)
+		f.close()
 		return "get body", err
 	}
 	bodyReceived := copy(f.framebuf, initialBody)
@@ -539,11 +600,12 @@ func (f *fetcher) fetch() (stage string, err error) {
 		// timer: every chunk received pushes it back.
 		conn.SetReadDeadline(minTime(time.Now().Add(bodyStallTimeout), bodyDeadline))
 		var n int
-		n, readErr = conn.Read(f.framebuf[bodyReceived:])
+		n, readErr = stream.Read(f.framebuf[bodyReceived:])
 		bodyReceived += n
 	}
+	f.bodyTook = time.Since(bodyStart)
 
-	closeConn(conn)
+	f.close()
 
 	if bodyReceived != len(f.framebuf) {
 		err = errIncompleteImage
@@ -557,6 +619,17 @@ func (f *fetcher) fetch() (stage string, err error) {
 	}
 
 	return "", nil
+}
+
+// close sends close_notify over an established TLS connection, then closes
+// the TCP conn. Either way the TLS secrets are wiped.
+func (f *fetcher) close() {
+	if f.tls != nil {
+		// The handshake's write deadline may have passed during the body.
+		f.conn.SetWriteDeadline(time.Now().Add(connTimeout))
+		f.tls.conn.Close()
+	}
+	closeConn(&f.conn)
 }
 
 // connIdle reports whether the conn is aborted: Abort zeroes the local port,
