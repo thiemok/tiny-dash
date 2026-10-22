@@ -21,7 +21,7 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "Building picoDevice firmware for Raspberry Pi Pico 2 W${PICO_BUILD_TAGS:+ (tags: $PICO_BUILD_TAGS)}..."
 
-tinygo build "${FLAGS[@]}" -o $OUTPUT_FILE ./cmd/picoDevice
+tinygo build "${FLAGS[@]}" -size=short -o $OUTPUT_FILE ./cmd/picoDevice
 
 echo "✓ picoDevice firmware built: $OUTPUT_FILE"
 

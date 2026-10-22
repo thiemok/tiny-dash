@@ -116,9 +116,10 @@ curl -fs localhost:8080/api/hello
 
 ## Notes & follow-ups
 
-- **CI scope:** `ci.yml` excludes the TinyGo firmware projects (`inky`, `picoDevice`) from
-  the build, since they need the TinyGo toolchain. A dedicated TinyGo job can cover them
-  later.
+- **CI scope:** `ci.yml`'s `validate` job builds the standard Go projects; the `firmware`
+  job installs a pinned TinyGo and builds/tests the TinyGo targets (`inky`, `picoDevice`
+  release + debug, `netkit`/`tinytls` `build:tinygo`/`test:tinygo`). Both are required
+  status checks.
 - **Image size:** ~600 MB (headless Chrome + fonts). Fonts (`fonts-liberation`,
   `fonts-noto-*`) are required — without them dashboard text renders as tofu boxes.
 - **Loop safety:** the release bot's commits carry `[skip ci]`, so its pushes (via PAT,
