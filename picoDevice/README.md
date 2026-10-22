@@ -169,7 +169,11 @@ stty -F /dev/ttyACM0 115200 raw -echo; timeout 300 cat /dev/ttyACM0 | tee device
 - Link loss: before each refresh the loop checks the link state the chip reports (LINK,
   DEAUTH and DISASSOC events drop it) and reconnects as above. Three consecutive network
   fetch failures also trigger a reconnect. The display keeps the last image meanwhile.
-- API fetch failures: Logs error and keeps the previous image
+- API fetch failures: Logs error and keeps the previous image. The fetch connection uses
+  lneto's RFC 6298 retransmission timer, so a lost request segment is resent (after 1 s,
+  then backing off) instead of hanging the fetch. A response header that does not arrive
+  within 10 s, or a body that makes no progress for 5 s or ends early, is retried up to
+  twice with a 500 ms–2 s jittered backoff before the cycle counts as failed.
 - Display update failures: Logs error but continues the refresh loop
 - Invalid response sizes: Validates before updating display
 

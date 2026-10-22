@@ -21,6 +21,12 @@ const (
 	dhcpRetries    = 3
 	gatewayTimeout = 500 * time.Millisecond
 	gatewayRetries = 4
+
+	mtu = 1500
+	// sendBufSize fits the largest frame EgressEthernet writes: the MTU plus
+	// the 14 B Ethernet header, without a CRC since none is configured.
+	// cyw43439.MaxFrameSize (2030 B) is the chip's limit, not the stack's.
+	sendBufSize = mtu + 14
 )
 
 // testMissingSSID is joined instead of config.WifiSSID while a WIFI_TEST_*
@@ -62,7 +68,7 @@ func newWifiLink(logger *slog.Logger, devLogger *slog.Logger) *wifiLink {
 	w := &wifiLink{
 		dev:       cyw43439.NewPicoWDevice(),
 		devcfg:    devcfg,
-		sendbuf:   make([]byte, cyw43439.MaxFrameSize),
+		sendbuf:   make([]byte, sendBufSize),
 		backoff:   backoff.Exponential{Min: time.Second, Max: time.Minute},
 		logger:    logger,
 		failJoins: wifiTestFailJoins,
@@ -158,7 +164,7 @@ func (w *wifiLink) tryConnect() (addr netip.Addr, stage string, err error) {
 		MaxActiveTCPPorts: 1,
 		RandSeed:          int64(rand32()) | 1,
 		HardwareAddress:   mac,
-		MTU:               1500,
+		MTU:               mtu,
 		PassivePeers:      2,
 	}
 	// Reset allocates a new ICMP echo queue whenever ICMPQueueLimit is set
