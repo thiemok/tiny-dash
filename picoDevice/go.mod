@@ -6,6 +6,7 @@ require (
 	github.com/soypat/cyw43439 v0.1.2-0.20261015151841-318d5aff4d24
 	github.com/soypat/lneto v0.3.2
 	github.com/thiemok/tiny-dash/inky v0.0.0
+	github.com/thiemok/tiny-dash/logkit v0.0.0
 	github.com/thiemok/tiny-dash/util v0.0.0
 )
 
@@ -18,3 +19,5 @@ require (
 replace github.com/thiemok/tiny-dash/inky => ../inky
 
 replace github.com/thiemok/tiny-dash/util => ../util
+
+replace github.com/thiemok/tiny-dash/logkit => ../logkit

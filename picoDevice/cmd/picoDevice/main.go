@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"machine"
 	"net/netip"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/thiemok/tiny-dash/inky/pkg/adapters"
 	"github.com/thiemok/tiny-dash/inky/pkg/inky"
 	"github.com/thiemok/tiny-dash/inky/pkg/inky/common"
+	"github.com/thiemok/tiny-dash/logkit"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
 	util "github.com/thiemok/tiny-dash/util/pkg"
 )
@@ -24,13 +27,23 @@ const connTimeout = 5 * time.Second
 const tcpbufsize = 2030 // MTU - ethhdr - iphdr - tcphdr
 const pollTime = 5 * time.Millisecond
 
+// logBuf bounds log memory; records that arrive while it is full are dropped
+// rather than blocking the caller. At Info level the fill peaks at ~350 B
+// (the startup burst), so 1 KiB leaves about 3x headroom.
+var logBuf [1024]byte
+
+const logFlushTimeout = 2 * time.Second
+
 func main() {
-	logger := initLogger()
+	logDrainer := initLogDrainer()
+	logRing := logDrainer.Src
+	logger := newLogger(logRing, slog.LevelInfo)
+	defer flushLogOnPanic(logger, logDrainer)
 	time.Sleep(5 * time.Second)
 	logger.Info("tiny-dash picoDevice Starting...")
 
 	display, requestURI := initDisplay(logger)
-	stack := initWifiStack(logger)
+	stack := initWifiStack(logger, newLogger(logRing, slog.LevelWarn))
 
 	go loopForeverStack(stack)
 
@@ -55,7 +68,17 @@ func main() {
 
 	logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "expectedBytes", expectedSize)
 
-	for {
+	ctx := context.Background()
+	var memStats, prevMemStats runtime.MemStats
+	if debugBuild {
+		runtime.ReadMemStats(&prevMemStats)
+		logger.LogAttrs(ctx, slog.LevelInfo, "heap",
+			slog.Uint64("heapSys", prevMemStats.HeapSys),
+			slog.Uint64("heapAlloc", prevMemStats.HeapAlloc),
+		)
+	}
+	for cycle := 1; ; cycle++ {
+		cycleStart := time.Now()
 		// Fetch image on a separate goroutine
 		type fetchResult struct{ err error }
 		ch := make(chan fetchResult, 1)
@@ -76,14 +99,62 @@ func main() {
 			}
 		}
 
+		if debugBuild {
+			// mallocs and allocBytes cover everything since the previous report,
+			// including that report's own log line and the sleep in between.
+			// LogAttrs with at most five Attrs keeps the record inline, so this
+			// line adds no allocations of its own beyond the handler's.
+			runtime.ReadMemStats(&memStats)
+			logger.LogAttrs(ctx, slog.LevelInfo, "refresh cycle done",
+				slog.Int("cycle", cycle),
+				slog.Int64("cycleMs", time.Since(cycleStart).Milliseconds()),
+				slog.Uint64("mallocs", memStats.Mallocs-prevMemStats.Mallocs),
+				slog.Uint64("allocBytes", memStats.TotalAlloc-prevMemStats.TotalAlloc),
+				slog.Uint64("heapAlloc", memStats.HeapAlloc),
+			)
+			prevMemStats = memStats
+		} else {
+			logger.LogAttrs(ctx, slog.LevelInfo, "refresh cycle done",
+				slog.Int("cycle", cycle),
+				slog.Int64("cycleMs", time.Since(cycleStart).Milliseconds()),
+			)
+		}
+
 		time.Sleep(refreshDuration)
 	}
 }
 
-func initLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(machine.Serial, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+// initLogDrainer returns a ring buffer drainer to serial running on its own
+// goroutine: TinyGo's USB-CDC Write spins until the host reads, so writing to
+// machine.Serial directly can stall any goroutine that logs, including the
+// network and display paths. Dropped bytes are reported by the drainer itself.
+func initLogDrainer() *logkit.Drainer {
+	drainer := &logkit.Drainer{
+		Src:      logkit.NewRingWriter(logBuf[:]),
+		Dst:      machine.Serial,
+		Ready:    machine.Serial.DTR,
+		Writable: (&usbWaker{}).Writable,
+	}
+	go drainer.Run()
+	return drainer
+}
+
+// flushLogOnPanic routes a panic in main through the log ring before letting
+// it continue. The runtime prints the panic straight to machine.Serial and
+// then halts the scheduler, so records still in the ring would be lost and,
+// with the bus suspended, nothing would wake the host to deliver the message.
+func flushLogOnPanic(logger *slog.Logger, drainer *logkit.Drainer) {
+	if r := recover(); r != nil {
+		logger.Error("panic", "error", r)
+		drainer.Flush(logFlushTimeout)
+		panic(r)
+	}
+}
+
+// newLogger writes to ring. Every record costs heap allocations in the
+// TextHandler, so the WiFi driver gets its own, quieter logger.
+func newLogger(ring *logkit.RingWriter, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewTextHandler(ring, &slog.HandlerOptions{Level: level}))
 }
 
 func initDisplay(logger *slog.Logger) (common.Display, string) {
@@ -120,10 +191,10 @@ func initDisplay(logger *slog.Logger) (common.Display, string) {
 	return display, requestURI
 }
 
-func initWifiStack(logger *slog.Logger) *cywnet.Stack {
+func initWifiStack(logger, driverLogger *slog.Logger) *cywnet.Stack {
 	logger.Info("Initializing WiFi...")
 	devcfg := cyw43439.DefaultWifiConfig()
-	devcfg.Logger = logger
+	devcfg.Logger = driverLogger
 	stack, err := cywnet.NewConfiguredPicoWithStack(config.WifiSSID, config.WifiPassword, devcfg, cywnet.StackConfig{
 		Hostname:          "tiny-dash-pico",
 		MaxActiveTCPPorts: 1,

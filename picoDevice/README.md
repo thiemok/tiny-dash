@@ -51,6 +51,19 @@ bash tools/build.sh
 ```
 
 This creates `dist/picoDevice.uf2` ready for flashing.
+`bash tools/build.sh flash`, which the `upload` target runs, builds with the same
+flags and flashes the result with `tinygo flash`.
+
+### Debug builds
+
+The default build is the release firmware. Measurement and test code (heap
+statistics in the logs, test knobs) only compiles into a debug build, tagged
+`picodebug`:
+
+```bash
+pnpm nx run picoDevice:build:debug   # dist/picoDevice.uf2 with -tags=picodebug
+pnpm nx run picoDevice:upload:debug  # flash a debug build
+```
 
 ## Flashing
 
@@ -69,6 +82,30 @@ tinygo monitor
 ```
 
 Or use any serial terminal at 115200 baud.
+
+Logs go through a 1 KiB [logkit](../logkit) ring buffer, not straight to `machine.Serial`.
+TinyGo's USB-CDC `Write` blocks until the host reads, so a port with DTR asserted but no reader
+would otherwise stall every goroutine that logs. Output is discarded while no reader holds DTR.
+If records were dropped, a `logkit: dropped=<bytes>` line with the running total is printed.
+A panic in `main` (e.g. `util.RequireNoError` at startup) is first logged as `level=ERROR msg=panic`
+and the ring is flushed, so the message and the records before it reach the host.
+
+TinyGo advertises USB remote wakeup but never signals it. Linux autosuspends the device after
+2 s without serial traffic, even while a reader has the port open, and output would then stop
+until the port is reopened. `usbWaker` (`cmd/picoDevice/usbwake.go`), a hook of the log drainer,
+holds output back and signals the wakeup whenever output is pending while the bus is suspended. Host-side alternative: disable autosuspend
+for the Pico, e.g. with a udev rule
+`ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="000a", TEST=="power/control", ATTR{power/control}="on"`.
+
+For a non-interactive capture:
+
+```bash
+stty -F /dev/ttyACM0 115200 raw -echo; timeout 300 cat /dev/ttyACM0 | tee device.log
+```
+
+`tools/serialstress` is a small firmware that reproduces the stall; `tools/build.sh` builds it into
+`dist/serialstress.uf2`. Each line reports how long the previous `Write` blocked. Build it with
+`-ldflags="-X main.mode=ring"` to compare with logkit.
 
 ## How It Works
 
@@ -119,6 +156,9 @@ Using the Nx workspace:
 ```bash
 # Build firmware
 nx build picoDevice
+
+# Build debug firmware (-tags=picodebug)
+nx run picoDevice:build:debug
 
 # Flash to device (requires device in BOOTSEL mode)
 nx upload picoDevice
