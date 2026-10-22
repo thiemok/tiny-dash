@@ -17,6 +17,13 @@ tinygo build -target=$TARGET -opt=2 -o "$OUTPUT_DIR/example.uf2" ./cmd/example
 echo ""
 echo "✓ Example built: $OUTPUT_DIR/example.uf2"
 echo ""
+
+# Not flashed by default (that is the eeprom-reader target); built so that it
+# keeps compiling.
+echo "Building eeprom-reader for $TARGET..."
+tinygo build -target=$TARGET -o "$OUTPUT_DIR/eeprom-reader.uf2" ./cmd/eeprom-reader
+echo "✓ eeprom-reader built: $OUTPUT_DIR/eeprom-reader.uf2"
+echo ""
 echo "To flash:"
 echo "  1. Hold BOOTSEL button while connecting Pico 2 W via USB"
 echo "  2. Copy $OUTPUT_DIR/example.uf2 to the RPI-RP2 drive"
