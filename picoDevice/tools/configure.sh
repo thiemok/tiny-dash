@@ -40,6 +40,8 @@ const (
 	WifiPassword    = "$WIFI_PASSWORD"
 	APIURL          = "$API_URL"
 	RefreshInterval = $REFRESH_INTERVAL
+	// DNSServer is used only when DHCP offers no DNS server; empty disables it.
+	DNSServer = "${DNS_SERVER:-}"
 
 	// Hardware test knobs, read by debug builds only; 0 disables them.
 	// See .env.example.

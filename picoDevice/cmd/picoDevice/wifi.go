@@ -57,21 +57,29 @@ type wifiLink struct {
 	inited    bool
 	icmpReady bool
 
-	// ipbuf formats the leased address for the connect log; netip.Addr.String
-	// allocates on every reconnect.
-	ipbuf [len("255.255.255.255")]byte
+	// dnsFallback is preset on every stack reset; a DNS server from DHCP
+	// replaces it.
+	dnsFallback netip.Addr
+	dnsServer   netip.Addr
+	dnsSource   string
+
+	// ipbuf and dnsbuf format addresses for the connect logs;
+	// netip.Addr.String allocates on every reconnect.
+	ipbuf  [len("255.255.255.255")]byte
+	dnsbuf [len("255.255.255.255")]byte
 }
 
-func newWifiLink(logger *slog.Logger, devLogger *slog.Logger) *wifiLink {
+func newWifiLink(logger *slog.Logger, devLogger *slog.Logger, dnsFallback netip.Addr) *wifiLink {
 	devcfg := cyw43439.DefaultWifiConfig()
 	devcfg.Logger = devLogger
 	w := &wifiLink{
-		dev:       cyw43439.NewPicoWDevice(),
-		devcfg:    devcfg,
-		sendbuf:   make([]byte, sendBufSize),
-		backoff:   backoff.Exponential{Min: time.Second, Max: time.Minute},
-		logger:    logger,
-		failJoins: wifiTestFailJoins,
+		dev:         cyw43439.NewPicoWDevice(),
+		devcfg:      devcfg,
+		sendbuf:     make([]byte, sendBufSize),
+		backoff:     backoff.Exponential{Min: time.Second, Max: time.Minute},
+		logger:      logger,
+		failJoins:   wifiTestFailJoins,
+		dnsFallback: dnsFallback,
 	}
 	w.onRecv = w.ingress
 	go w.pollLoop()
@@ -114,6 +122,7 @@ func (w *wifiLink) connect() {
 					slog.Duration("took", time.Since(start)),
 				)
 			}
+			w.logDNSServer()
 			return
 		}
 		wait := w.backoff.Next(rand32())
@@ -166,6 +175,7 @@ func (w *wifiLink) tryConnect() (addr netip.Addr, stage string, err error) {
 		HardwareAddress:   mac,
 		MTU:               mtu,
 		PassivePeers:      2,
+		DNSServer:         w.dnsFallback,
 	}
 	// Reset allocates a new ICMP echo queue whenever ICMPQueueLimit is set
 	// and leaves the ICMP client alone otherwise, so only the first Reset
@@ -194,12 +204,34 @@ func (w *wifiLink) tryConnect() (addr netip.Addr, stage string, err error) {
 	if err = w.stack.AssimilateDHCPResults(results); err != nil {
 		return addr, "dhcp assimilate", err
 	}
+	switch {
+	case len(results.DNSServers) > 0:
+		w.dnsServer, w.dnsSource = results.DNSServers[0], "dhcp"
+	case w.dnsFallback.IsValid():
+		w.dnsServer, w.dnsSource = w.dnsFallback, "fallback"
+	default:
+		w.dnsServer, w.dnsSource = netip.Addr{}, ""
+	}
 	gatewayHW, err := rstack.DoResolveHardwareAddress6(results.Router, gatewayTimeout, gatewayRetries)
 	if err != nil {
 		return addr, "gateway arp", err
 	}
 	w.stack.SetGatewayHardwareAddr(gatewayHW)
 	return netip.AddrFrom4(results.AssignedAddr4), "", nil
+}
+
+// logDNSServer reports the DNS server the last lease left the stack with.
+// Without one, host names in API_URL cannot be resolved; IP literals still
+// work.
+func (w *wifiLink) logDNSServer() {
+	ctx := context.Background()
+	if !w.dnsServer.IsValid() {
+		w.logger.LogAttrs(ctx, slog.LevelWarn, "no DNS server: DHCP offered none and DNS_SERVER is unset")
+		return
+	}
+	w.logger.LogAttrs(ctx, slog.LevelInfo, "dns server",
+		slog.String("ip", bytesString(w.dnsServer.AppendTo(w.dnsbuf[:0]))),
+		slog.String("source", w.dnsSource))
 }
 
 // up reports the link state the chip last signalled: LINK, DEAUTH and
