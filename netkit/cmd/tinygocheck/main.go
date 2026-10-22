@@ -10,7 +10,10 @@ import (
 	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
 	"github.com/thiemok/tiny-dash/netkit/pkg/bufshare"
 	"github.com/thiemok/tiny-dash/netkit/pkg/dnsquery"
+	"github.com/thiemok/tiny-dash/netkit/pkg/ntpquery"
 	"github.com/thiemok/tiny-dash/netkit/pkg/resolve"
+	"github.com/thiemok/tiny-dash/netkit/pkg/timesync"
+	"github.com/thiemok/tiny-dash/netkit/pkg/wallclock"
 )
 
 func main() {
@@ -35,4 +38,12 @@ func main() {
 	println(len(req), err.Error())
 	sb := bufshare.New(make([]byte, 8))
 	println(sb.Acquire(&bufshare.User{Name: "a", Idle: func() bool { return true }}) == nil)
+	ntpReq := ntpquery.AppendRequest(nil, 1)
+	_, err = ntpquery.ParseResponse(ntpReq, 1, 0, 1)
+	println(err.Error())
+	clock := wallclock.New(func() int64 { return time.Now().UnixNano() }, time.Unix(0, 0))
+	_, err = clock.Set(time.Now(), clock.Nanotime())
+	println(clock.Nanotime(), err == nil)
+	sched := timesync.New(timesync.Policy{Interval: time.Hour, Retry: b})
+	println(sched.Due(time.Now()))
 }

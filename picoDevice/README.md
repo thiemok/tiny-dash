@@ -73,6 +73,36 @@ Current limitations:
   http→https redirect) is logged as
   `server redirected to https; set API_URL scheme to https` with the `Location`.
 
+### Time (NTP)
+
+Certificate validation (https, THI-32) needs the wall time, and the device boots at
+1970-01-01. After WiFi comes up, before the first fetch, the device syncs a wall clock
+(`netkit/pkg/wallclock`: the monotonic time since boot plus an offset) with the NTP server
+`NTP_SERVER` (default `pool.ntp.org`, resolved through the DNS resolver above before every
+sync; an IPv4 literal skips DNS). The request and response are SNTPv4 (`netkit/pkg/ntpquery`):
+the response must echo a random nonce, and kiss-of-death, unsynchronized (leap alarm,
+stratum 16) and malformed answers are refused. The conn borrows the fetch conn's idle
+receive buffer, as the DNS lookups do.
+
+- Each sync logs `ntp server` (host, ip) and then `✓ clock synced` with the stratum, the
+  round trip, the `offset` the clock moved by and, in debug builds, the sync's heap
+  allocations. Log lines
+  carry the wall time from then on; before the first sync their time is the time since boot
+  as `1970-01-01T...`.
+- The clock re-syncs every 12 h and after every WiFi reconnect. A re-sync that moves it by
+  more than 10 s logs `large clock step on re-sync`.
+- A failed sync logs `ntp sync failed` with the stage (debug builds add its heap
+  allocations) and is
+  retried at the start of a later refresh cycle, backing off from 30 s to 15 min.
+  Plain-HTTP fetches carry on meanwhile; until the first success the clock reports not synced (`Clock.Synced`,
+  and `Clock.Nanotime` returns 0, so certificate checks fail closed).
+- The build time is the clock's floor: `tools/build.sh` and the `upload` target pass
+  `-ldflags "-X main.buildUnix=$(date -u +%s)"`, and no NTP answer can set the clock earlier.
+  The `wall clock floor` line at boot shows it.
+
+DHCP option 42 (NTP servers) is not used: lneto requests and parses it but does not expose
+it, and the LAN's DHCP server does not offer it.
+
 ### Migrating from API_HOST/API_PORT
 
 Older `.env` files used `API_HOST` and `API_PORT`. Replace them with a single line:
@@ -209,6 +239,17 @@ every join. To see why a join failed, raise the driver logger in `main.go` to In
 join then records `rxEvent` lines whose `status` and `reason` say why (status 3 = no
 network found, 1 = failure).
 
+### Memory test knobs
+
+Like the WiFi test knobs, these only take effect in debug builds
+(`pnpm nx run picoDevice:upload:debug`). The `cycle` line's `mallocs`, `bytes` and `heapAlloc`
+are debug-only too: a release build logs just `n` and `ok`.
+
+- `NTP_TEST_SYNC_INTERVAL=N`: re-sync the clock every N seconds instead of every 12 hours,
+  to exercise the sync path many times in one session.
+- `MEM_TEST_GC=true`: run the GC before each cycle's `runtime.ReadMemStats`, so the
+  `heapAlloc` of the `cycle` line is the live heap and a leak shows as steady growth.
+
 ## Development
 
 ### Dependencies
@@ -216,7 +257,7 @@ network found, 1 = failure).
 - TinyGo (for building Pico 2 W firmware)
 - github.com/soypat/cyw43439 (WiFi driver)
 - github.com/thiemok/tiny-dash/inky (e-ink display library)
-- github.com/thiemok/tiny-dash/netkit (API URL parsing, retry backoff, DNS query and caching policy)
+- github.com/thiemok/tiny-dash/netkit (API URL parsing, retry backoff, DNS query and caching policy, NTP query, wall clock and sync schedule)
 
 ### Project Structure
 

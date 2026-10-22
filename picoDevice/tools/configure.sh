@@ -42,12 +42,17 @@ const (
 	RefreshInterval = $REFRESH_INTERVAL
 	// DNSServer is used only when DHCP offers no DNS server; empty disables it.
 	DNSServer = "${DNS_SERVER:-}"
+	// NTPServer is a host name, resolved via DNS before every sync, or an
+	// IPv4 literal.
+	NTPServer = "${NTP_SERVER:-pool.ntp.org}"
 
 	// Hardware test knobs, read by debug builds only; 0 disables them.
 	// See .env.example.
 	WifiTestFailJoins        = ${WIFI_TEST_FAIL_JOINS:-0}
 	WifiTestOutageAfterCycle = ${WIFI_TEST_OUTAGE_AFTER_CYCLE:-0}
 	WifiTestOutageFailJoins  = ${WIFI_TEST_OUTAGE_FAIL_JOINS:-0}
+	NTPTestSyncInterval      = ${NTP_TEST_SYNC_INTERVAL:-0}
+	MemTestGC                = ${MEM_TEST_GC:-false}
 )
 EOF
 

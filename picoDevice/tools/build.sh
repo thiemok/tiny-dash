@@ -7,7 +7,10 @@ OUTPUT_FILE="$OUTPUT_DIR/picoDevice.uf2"
 
 # Both modes use these flags, so `tools/build.sh flash` (the upload target)
 # flashes the same firmware that a build produces.
-FLAGS=(-target=$TARGET -scheduler=tasks -stack-size=8kb -opt=2 ${PICO_BUILD_TAGS:+-tags=$PICO_BUILD_TAGS})
+#
+# buildUnix is the wall clock's floor: no NTP answer can set it earlier.
+FLAGS=(-target=$TARGET -scheduler=tasks -stack-size=8kb -opt=2 ${PICO_BUILD_TAGS:+-tags=$PICO_BUILD_TAGS}
+  -ldflags="-X main.buildUnix=$(date -u +%s)")
 
 if [ "$1" = flash ]; then
   echo "Flashing picoDevice firmware to Pico 2 W${PICO_BUILD_TAGS:+ (tags: $PICO_BUILD_TAGS)}..."

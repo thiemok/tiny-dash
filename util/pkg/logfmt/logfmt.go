@@ -30,6 +30,12 @@ type Options struct {
 	Level slog.Leveler
 	// OmitTime drops the leading time=... field.
 	OmitTime bool
+	// Time, if set, replaces the record's time in the time=... field, e.g.
+	// with a wall clock on a device that boots at the Unix epoch. A zero
+	// result keeps the record's time. It is called with the handler's lock
+	// held, so it must not log, and it must not allocate to keep Handle
+	// allocation-free.
+	Time func() time.Time
 	// BufferSize is the initial line buffer capacity; 0 means 256.
 	BufferSize int
 }
@@ -48,6 +54,7 @@ type Handler struct {
 	s        *sink
 	level    slog.Leveler
 	omitTime bool
+	time     func() time.Time
 	group    string
 	prefix   []byte
 }
@@ -66,7 +73,7 @@ func NewHandler(w io.Writer, opts *Options) *Handler {
 	}
 	s := &sink{w: w, buf: make([]byte, 0, o.BufferSize)}
 	s.attrFn = s.appendAttr
-	return &Handler{s: s, level: o.Level, omitTime: o.OmitTime}
+	return &Handler{s: s, level: o.Level, omitTime: o.OmitTime, time: o.Time}
 }
 
 // WithLevel returns a Handler sharing h's writer, buffer and lock but with a
@@ -86,9 +93,9 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := s.buf[:0]
-	if !h.omitTime && !r.Time.IsZero() {
+	if t := h.recordTime(r); !h.omitTime && !t.IsZero() {
 		b = append(b, "time="...)
-		b = r.Time.AppendFormat(b, timeFormat)
+		b = t.AppendFormat(b, timeFormat)
 		b = append(b, ' ')
 	}
 	b = append(b, "level="...)
@@ -102,6 +109,15 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	s.buf = append(s.buf, '\n')
 	_, err := s.w.Write(s.buf)
 	return err
+}
+
+func (h *Handler) recordTime(r slog.Record) time.Time {
+	if h.time != nil && !h.omitTime {
+		if t := h.time(); !t.IsZero() {
+			return t
+		}
+	}
+	return r.Time
 }
 
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
