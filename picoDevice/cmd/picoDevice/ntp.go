@@ -115,6 +115,7 @@ func newTimeSync(logger *slog.Logger, link *wifiLink, u *udpConn, clock *wallclo
 		RxQueueSize: udpQueueSize,
 		TxQueueSize: udpQueueSize,
 		RWBackoff:   pollBackoff,
+		MTU:         mtu,
 	}
 	end := 2*ntpRxBufSize + ntpquery.Size
 	t.buf = borrowed[ntpRxBufSize+ntpquery.Size : end : end]
@@ -198,7 +199,7 @@ func (t *timeSync) sync() (res ntpquery.Result, step time.Duration, stage string
 		slog.Bool("dns", t.dns != nil))
 
 	// The lookup's registration cannot be re-targeted at the NTP server:
-	// lneto v0.3.2 has no way to change an open conn's remote port, and a
+	// lneto has no way to change an open conn's remote port, and a
 	// fresh Open or Configure invalidates the registration. So a sync with a
 	// lookup costs two DialUDPs, 6 mallocs / 40 B.
 	if err = t.udp.acquire(t.cfg); err != nil {

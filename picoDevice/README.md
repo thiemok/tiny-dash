@@ -68,7 +68,6 @@ Current limitations:
 
 - Only A records for the host name itself are used, so the lookup fails for a host name
   that the resolver answers with a CNAME chain.
-- **https** is not supported yet.
 - **Redirects** (3xx) are not followed. A redirect to https (e.g. a reverse proxy's
   http→https redirect) is logged as
   `server redirected to https; set API_URL scheme to https` with the `Location`.
@@ -94,14 +93,53 @@ receive buffer, as the DNS lookups do.
 - A failed sync logs `ntp sync failed` with the stage (debug builds add its heap
   allocations) and is
   retried at the start of a later refresh cycle, backing off from 30 s to 15 min.
-  Plain-HTTP fetches carry on meanwhile; until the first success the clock reports not synced (`Clock.Synced`,
-  and `Clock.Nanotime` returns 0, so certificate checks fail closed).
+  Plain-HTTP fetches carry on meanwhile; https fetches wait (see [HTTPS](#https)). Until the
+  first success the clock reports not synced (`Clock.Synced`, and `Clock.Nanotime` returns 0,
+  so certificate checks fail closed).
 - The build time is the clock's floor: `tools/build.sh` and the `upload` target pass
   `-ldflags "-X main.buildUnix=$(date -u +%s)"`, and no NTP answer can set the clock earlier.
   The `wall clock floor` line at boot shows it.
 
 DHCP option 42 (NTP servers) is not used: lneto requests and parses it but does not expose
 it, and the LAN's DHCP server does not offer it.
+
+### HTTPS
+
+An `https://` API_URL is fetched over TLS 1.3 with the `tinytls` module
+(`TLS_AES_128_GCM_SHA256`, X25519) on top of the same TCP conn. The SNI and the `Host`
+header are the host name, and the port defaults to 443. Plain `http://` stays supported for
+local development and does not link any TLS state into the fetch path.
+
+- **Validation.** Every handshake validates the chain up to an embedded root (ISRG Root X1
+  or Root YR, Let's Encrypt's RSA roots; `tinytls/roots`), the host name, the validity
+  period at the NTP time, and the server's CertificateVerify signature. The firmware has no
+  way to skip it. A server certificate from another CA needs its root added to
+  `tinytls/roots`.
+- **Clock.** Before the first NTP sync, an https fetch is refused instead of validating
+  against a wrong time: `image fetch failed stage=clock error="wall clock not synced; ..."`.
+  The display keeps the last image, and the fetch goes ahead in the first cycle after a sync.
+- **Failures.** A certificate that does not validate logs `image fetch failed stage="tls
+  verify"` with the reason, e.g. `x509: certificate is not valid for the expected name`
+  or `x509: certificate signed by unknown authority`. It
+  is not retried within the cycle and does not count towards a WiFi reconnect. A handshake
+  that does not finish within 10 s is retried like a missing response header. Either way
+  the display keeps the last image.
+- **Entropy.** TinyGo's `crypto/rand` has no source on the RP2350, so the key shares come
+  from `tinytls/drbg` (a SHA-256 DRBG), seeded at boot from the RP2350 TRNG with its health
+  tests enabled (`✓ TRNG seeded the TLS DRBG`, ~1 s for three 192-bit samples) and fed a
+  fresh TRNG sample before every handshake. A sample that fails a health test or takes
+  more than eight times the expected ~335 ms restarts the TRNG; only a source that keeps
+  failing halts the device (`TRNG broken; halting`), as no handshake is secure without it.
+- **Teardown.** After every fetch the device sends `close_notify`, wipes the session
+  secrets and closes the TCP conn. The TLS state (20.7 KB, mostly a 16.6 KB record buffer,
+  as the server sends full 16 KiB records and ignores `max_fragment_length`) is allocated
+  once at startup and reused, so a fetch does not allocate. The 8 KB handshake buffer and
+  the certificate verifier's 18.8 KB scratch are borrowed from the framebuffer, which the
+  body overwrites anyway.
+- **Timing.** `display updated successfully` logs the `handshake` and `body` times: about
+  250 ms and 1.1 s for the 192,000 B image.
+- **Stack.** The handshake runs on the main goroutine. It uses about 4.9 KB of the 8 KB
+  `-stack-size` (`main stack headroom=3252` in a debug build with `MEM_TEST_GC=true`).
 
 ### Migrating from API_HOST/API_PORT
 
@@ -248,7 +286,9 @@ are debug-only too: a release build logs just `n` and `ok`.
 - `NTP_TEST_SYNC_INTERVAL=N`: re-sync the clock every N seconds instead of every 12 hours,
   to exercise the sync path many times in one session.
 - `MEM_TEST_GC=true`: run the GC before each cycle's `runtime.ReadMemStats`, so the
-  `heapAlloc` of the `cycle` line is the live heap and a leak shows as steady growth.
+  `heapAlloc` of the `cycle` line is the live heap and a leak shows as steady growth. It also
+  logs `main stack headroom=N`, the bytes of the main goroutine's stack (which runs the
+  fetch and the TLS handshake) that were never written, to size `-stack-size`.
 
 ## Development
 

@@ -1,7 +1,7 @@
 github.com/soypat/cyw43439 v0.1.2-0.20261015151841-318d5aff4d24 h1:ogHBqA+gfk84v6C/YXenRmKn4E6VXf8hNGFMKh2FCWw=
 github.com/soypat/cyw43439 v0.1.2-0.20261015151841-318d5aff4d24/go.mod h1:m6h3w6qF/iKajXo3mo/Kh0xqfaELSvdXX4JIpv8TO8M=
-github.com/soypat/lneto v0.3.2 h1:iUFeRSq2czT7Db6MMOsAnMCBlKCqvIr941zsNf9dcu0=
-github.com/soypat/lneto v0.3.2/go.mod h1:Be5PjwoYukvHFiUXxpYi8+ppH2F/gw/vjGBvFdv+Ti8=
+github.com/soypat/lneto v0.4.1-0.20261020183255-fd69eebbb0c3 h1:CQjPStixIwjzsY+fmx8kQSjsBd/yQ5D4ZmH0stE7nW0=
+github.com/soypat/lneto v0.4.1-0.20261020183255-fd69eebbb0c3/go.mod h1:Be5PjwoYukvHFiUXxpYi8+ppH2F/gw/vjGBvFdv+Ti8=
 github.com/soypat/seqs v0.0.0-20260125140838-2c1c6b1bd69e h1:xF3R+8683ngGNUeIy8PHJZiJZ/XIw+hlGgxg572P0Mw=
 github.com/soypat/seqs v0.0.0-20260125140838-2c1c6b1bd69e/go.mod h1:oCVCNGCHMKoBj97Zp9znLbQ1nHxpkmOY9X+UAGzOxc8=
 github.com/tinygo-org/pio v0.3.0 h1:opEnOtw58KGB4RJD3/n/Rd0/djYGX3DeJiXLI6y/yDI=

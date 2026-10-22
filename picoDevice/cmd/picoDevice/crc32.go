@@ -9,7 +9,7 @@ import (
 )
 
 // lneto's ethernet package initialises its FCS table with
-// crc32.MakeTable(crc32.IEEE) (ethernet/crc.go:13, unchanged in v0.4.0).
+// crc32.MakeTable(crc32.IEEE) (ethernet/crc.go:13, unchanged up to fd69eebbb0c3).
 // MakeTable runs through a sync.OnceFunc whose defer/recover TinyGo cannot
 // evaluate at build time, so the init runs at boot and builds the 8 KiB
 // slicing-by-8 table on the heap (Go 1.26 hash/crc32/crc32.go:113). Nothing

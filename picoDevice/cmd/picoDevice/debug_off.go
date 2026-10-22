@@ -15,3 +15,6 @@ const (
 
 // simulateOutage is a debug-only fault injection; see wifi_debug.go.
 func (*wifiLink) simulateOutage(int) {}
+
+// stackHeadroom is debug-only; see stack.go.
+func stackHeadroom() uintptr { return 0 }

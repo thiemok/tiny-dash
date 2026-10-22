@@ -4,10 +4,12 @@ go 1.26.0
 
 require (
 	github.com/soypat/cyw43439 v0.1.2-0.20261015151841-318d5aff4d24
-	github.com/soypat/lneto v0.3.2
+	github.com/soypat/lcrypto v0.0.0-20260926162243-a1194659b688
+	github.com/soypat/lneto v0.4.1-0.20261020183255-fd69eebbb0c3
 	github.com/thiemok/tiny-dash/inky v0.0.0
 	github.com/thiemok/tiny-dash/logkit v0.0.0
 	github.com/thiemok/tiny-dash/netkit v0.0.0
+	github.com/thiemok/tiny-dash/tinytls v0.0.0
 	github.com/thiemok/tiny-dash/util v0.0.0
 )
 
@@ -24,3 +26,7 @@ replace github.com/thiemok/tiny-dash/netkit => ../netkit
 replace github.com/thiemok/tiny-dash/util => ../util
 
 replace github.com/thiemok/tiny-dash/logkit => ../logkit
+
+replace github.com/thiemok/tiny-dash/tinytls => ../tinytls
+
+replace github.com/soypat/lcrypto => ../third_party/lcrypto

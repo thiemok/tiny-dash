@@ -20,8 +20,8 @@ const (
 
 func mustName(t testing.TB, s string) dns.Name {
 	t.Helper()
-	n, err := dns.NewName(s)
-	if err != nil {
+	var n dns.Name
+	if err := n.Parse(s); err != nil {
 		t.Fatal(err)
 	}
 	return n
