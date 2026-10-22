@@ -1,3 +1,7 @@
+## 0.3.2 (2026-10-22)
+
+This was a version bump only for api to align it with other projects, there were no code changes.
+
 ## 0.3.1 (2026-10-22)
 
 ### 🚀 Features
