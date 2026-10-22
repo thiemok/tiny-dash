@@ -5,7 +5,7 @@ A dashboard display system for Raspberry Pi Pico 2 W with e-ink displays. The sy
 ## System Architecture
 
 ```
-┌─────────────────┐         HTTP          ┌─────────────────┐
+┌─────────────────┐     HTTPS / HTTP      ┌─────────────────┐
 │   picoDevice    │ ◄─────────────────────►│   API Server    │
 │  (Pico 2 W)     │   Image Data (packed)  │   (Go HTTP)     │
 │                 │                        │                 │
@@ -55,31 +55,38 @@ TinyGo library for Pimoroni Inky e-ink displays:
 
 ## Quick Start
 
-### 1. Start the API Server
+### 1. API Server
+
+The device fetches from the API at `API_URL`: either a deployment (see
+[DEPLOYMENT.md](DEPLOYMENT.md)), typically https behind a reverse proxy, or a local
+server for development:
 
 ```bash
-cd api
-go run main.go
+pnpm nx run api:serve
 ```
 
-The API will start on port 8080.
+It listens on port 8080 (plain http).
 
 ### 2. Configure picoDevice
 
 ```bash
 cd picoDevice
 cp .env.example .env
-# Edit .env with your WiFi credentials and API host
+# Edit .env with your WiFi credentials
 ```
 
 Example `.env`:
 ```bash
 WIFI_SSID=YourWiFiNetwork
 WIFI_PASSWORD=YourPassword
-API_HOST=192.168.1.100  # Your computer's IP
-API_PORT=8080
+API_URL=http://192.168.1.100:8080  # Your computer's IP, for a local api:serve
+# A deployment instead (rebuild and re-flash to switch either way):
+# API_URL=https://dashboard.example.com
 REFRESH_INTERVAL=60
 ```
+
+See [picoDevice/README.md](picoDevice/README.md#configuration) for all keys, including the
+DNS and NTP settings that https needs.
 
 ### 3. Build and Flash picoDevice
 
@@ -110,7 +117,8 @@ You should see:
 
 1. **picoDevice** boots and auto-detects the e-ink display
 2. Connects to WiFi using configured credentials
-3. Sends HTTP GET request to API with display parameters:
+3. Resolves the API host via DNS, syncs the clock via NTP, and sends an HTTPS GET
+   request (certificate validated on the device) to the API with display parameters:
    - Resolution (width x height)
    - Color depth (bits per pixel)
    - Supported colors
@@ -120,7 +128,7 @@ You should see:
    - Packs pixels matching display's framebuffer format
 5. **picoDevice** receives packed pixel data
 6. Copies data to display framebuffer
-7. Updates e-ink display (takes 30-40 seconds)
+7. Updates e-ink display (about 22 seconds)
 8. Waits for refresh interval
 9. Repeats from step 3
 
