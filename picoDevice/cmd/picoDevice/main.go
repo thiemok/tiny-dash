@@ -12,8 +12,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/soypat/cyw43439"
-	"github.com/soypat/cyw43439/examples/cywnet"
 	"github.com/soypat/lneto/http/httpraw"
 	"github.com/soypat/lneto/tcp"
 	"github.com/soypat/lneto/x/xnet"
@@ -30,6 +28,11 @@ import (
 const connTimeout = 5 * time.Second
 const tcpbufsize = 2030 // MTU - ethhdr - iphdr - tcphdr
 const pollTime = 5 * time.Millisecond
+
+// maxFetchFailures consecutive network failures trigger a reconnect even
+// while the chip reports the link up, e.g. when the DHCP lease or the route
+// to the server is gone.
+const maxFetchFailures = 3
 
 // logBuf bounds log memory; records that arrive while it is full are dropped
 // rather than blocking the caller. At Info level the fill peaks at ~350 B
@@ -61,20 +64,18 @@ func main() {
 
 	apiURL, svAddr := parseAPIURL(logger)
 	display, requestURI := initDisplay(logger, apiURL)
-	stack := initWifiStack(logger, logHandler)
+	logger.Info("Initializing WiFi...")
+	// Warn keeps the driver from allocating on every reconnect: its Info-level
+	// rxEvent records carry eight attrs, beyond slog.Record's inline five.
+	// Raise it to Info to see the event status and reason of a failed join.
+	link := newWifiLink(logger, slog.New(logHandler.WithLevel(slog.LevelWarn)))
+	link.connect()
 
-	go loopForeverStack(stack)
-
-	// DHCP
-	dhcpResults, err := stack.SetupWithDHCP(cywnet.DHCPConfig{})
-	util.RequireNoError(err, "DHCP failed")
-	logger.Info("✓ DHCP complete", "ip", netip.AddrFrom4(dhcpResults.AssignedAddr4).String())
-
-	lstack := stack.LnetoStack()
+	lstack := &link.stack
 	req := buildHTTPRequest(requestURI, apiURL)
 	f := &fetcher{
 		lstack: lstack,
-		rstack: lstack.StackRetrying(backoff),
+		rstack: lstack.StackRetrying(pollBackoff),
 		addr:   svAddr,
 		req:    req,
 		hdrBuf: make([]byte, 0, headerBufSize),
@@ -99,11 +100,30 @@ func main() {
 	} else {
 		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "addr", svAddr.String(), "expectedBytes", len(f.framebuf))
 	}
+	fetchFailures := 0
 	for cycle := 1; ; cycle++ {
+		if !link.up() || fetchFailures >= maxFetchFailures {
+			// The display keeps showing the last image while offline.
+			logger.LogAttrs(ctx, slog.LevelWarn, "wifi link lost; reconnecting",
+				slog.Bool("linkUp", link.up()), slog.Int("fetchFailures", fetchFailures))
+			link.connect()
+			fetchFailures = 0
+			if debugBuild {
+				// connect logs its own allocations; keep them out of the cycle's.
+				runtime.ReadMemStats(&prev)
+			}
+		}
+
 		stage, err := f.fetch()
+		switch {
+		case err == nil:
+			fetchFailures = 0
+		case err != errHTTPStatus && err != errRedirect:
+			fetchFailures++
+		}
 		ok := err == nil
 		if !ok {
-			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err))
+			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err), slog.Int("failures", fetchFailures))
 		} else if err = display.Update(); err != nil {
 			ok = false
 			logger.LogAttrs(ctx, slog.LevelError, "display update failed", slog.Any("error", err))
@@ -126,7 +146,12 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelInfo, "cycle", slog.Int("n", cycle), slog.Bool("ok", ok))
 		}
 
-		time.Sleep(refreshDuration)
+		if debugBuild && cycle == wifiTestOutageAfterCycle {
+			link.simulateOutage(wifiTestOutageFailJoins)
+		}
+		if fetchFailures < maxFetchFailures {
+			time.Sleep(refreshDuration)
+		}
 	}
 }
 
@@ -200,29 +225,7 @@ func initDisplay(logger *slog.Logger, apiURL apiurl.URL) (common.Display, string
 	return display, string(uri)
 }
 
-func initWifiStack(logger *slog.Logger, logHandler *logfmt.Handler) *cywnet.Stack {
-	logger.Info("Initializing WiFi...")
-	devcfg := cyw43439.DefaultWifiConfig()
-	devcfg.Logger = slog.New(logHandler.WithLevel(slog.LevelWarn))
-	stack, err := cywnet.NewConfiguredPicoWithStack(config.WifiSSID, config.WifiPassword, devcfg, cywnet.StackConfig{
-		Hostname:          "tiny-dash-pico",
-		MaxActiveTCPPorts: 1,
-	})
-	util.RequireNoError(err, "Wifi initialization failed")
-	logger.Info("✓ WiFi hardware initialized")
-	return stack
-}
-
-func loopForeverStack(stack *cywnet.Stack) {
-	for {
-		send, recv, _ := stack.RecvAndSend()
-		if send == 0 && recv == 0 {
-			time.Sleep(pollTime)
-		}
-	}
-}
-
-func backoff(uint) time.Duration { return pollTime }
+func pollBackoff(uint) time.Duration { return pollTime }
 
 // parseAPIURL fails before WiFi bring-up so a bad API_URL is reported
 // immediately instead of after a DHCP round trip.
@@ -281,7 +284,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 		RxBuf:             f.rxBuf,
 		TxBuf:             f.txBuf,
 		TxPacketQueueSize: 3,
-		RWBackoff:         backoff,
+		RWBackoff:         pollBackoff,
 	})
 	if err != nil {
 		// Configure only fails on a conn that is not closed; abort it so the

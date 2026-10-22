@@ -2,7 +2,12 @@
 // proves they compile for the Pico target with TinyGo.
 package main
 
-import "github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
+import (
+	"time"
+
+	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
+	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
+)
 
 func main() {
 	u, err := apiurl.Parse("http://192.168.1.10:8080")
@@ -10,4 +15,6 @@ func main() {
 		panic(err)
 	}
 	println(u.String())
+	b := backoff.Exponential{Min: time.Second, Max: time.Minute}
+	println(b.Next(1).String())
 }
