@@ -7,6 +7,7 @@ require (
 	github.com/soypat/lneto v0.3.2
 	github.com/thiemok/tiny-dash/inky v0.0.0
 	github.com/thiemok/tiny-dash/logkit v0.0.0
+	github.com/thiemok/tiny-dash/netkit v0.0.0
 	github.com/thiemok/tiny-dash/util v0.0.0
 )
 
@@ -17,6 +18,8 @@ require (
 )
 
 replace github.com/thiemok/tiny-dash/inky => ../inky
+
+replace github.com/thiemok/tiny-dash/netkit => ../netkit
 
 replace github.com/thiemok/tiny-dash/util => ../util
 

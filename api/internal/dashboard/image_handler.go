@@ -115,6 +115,7 @@ func (h *ImageHandler) renderDithered(ctx context.Context, r *http.Request, outp
 
 func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	slog.InfoContext(ctx, "image request", "host", r.Host)
 
 	width, height, colorDepth, palette, err := h.parseParams(r)
 	if err != nil {

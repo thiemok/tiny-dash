@@ -1,6 +1,7 @@
 package e673
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -132,13 +133,24 @@ func (d *E673Display) sendCommand(command byte, data []byte) {
 	common.SendCommand(d.config.SPI, d.config.CS, d.config.DC, command, data)
 }
 
+// Command data sent on every Update; package-level so the SPI interface call
+// does not heap-allocate a fresh literal each refresh.
+var (
+	updateBTST2 = []byte{0x6F, 0x1F, 0x17, 0x49}
+	zeroByte    = []byte{0x00}
+
+	errPowerOnTimeout  = errors.New("timeout waiting for power on")
+	errRefreshTimeout  = errors.New("timeout waiting for display refresh")
+	errPowerOffTimeout = errors.New("timeout waiting for power off")
+)
+
 // Update transfers the framebuffer to the display and triggers a refresh
 // This takes approximately 32 seconds to complete for the E673
 func (d *E673Display) Update() error {
 	// Power on
 	d.sendCommand(phat.CmdPON, nil)
 	if !common.BusyWait(d.config.BUSY, 1) {
-		return fmt.Errorf("timeout waiting for power on")
+		return errPowerOnTimeout
 	}
 
 	// Send packed image data to display
@@ -146,21 +158,21 @@ func (d *E673Display) Update() error {
 
 	// Second setting of BTST2 register (from Python implementation)
 	// Note: E673 uses 0x49 instead of E640's 0x47
-	d.sendCommand(phat.CmdBTST2, []byte{0x6F, 0x1F, 0x17, 0x49})
+	d.sendCommand(phat.CmdBTST2, updateBTST2)
 
 	// Display refresh
-	d.sendCommand(phat.CmdDRF, []byte{0x00})
+	d.sendCommand(phat.CmdDRF, zeroByte)
 
 	// Wait for refresh to complete (E673 takes ~32 seconds)
 	println("Refreshing display (this takes ~32 seconds)...")
 	if !common.BusyWait(d.config.BUSY, 35) {
-		return fmt.Errorf("timeout waiting for display refresh")
+		return errRefreshTimeout
 	}
 
 	// Power off
-	d.sendCommand(phat.CmdPOF, []byte{0x00})
+	d.sendCommand(phat.CmdPOF, zeroByte)
 	if !common.BusyWait(d.config.BUSY, 1) {
-		return fmt.Errorf("timeout waiting for power off")
+		return errPowerOffTimeout
 	}
 
 	return nil

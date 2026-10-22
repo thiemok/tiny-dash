@@ -1,0 +1,29 @@
+{
+  "name": "netkit",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "netkit",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "go build ./...",
+        "cwd": "netkit"
+      }
+    },
+    "build:tinygo": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tinygo build -target=pico2-w -o /dev/null ./cmd/tinygocheck",
+        "cwd": "netkit"
+      }
+    },
+    "test:tinygo": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tinygo test ./pkg/...",
+        "cwd": "netkit"
+      }
+    }
+  }
+}
