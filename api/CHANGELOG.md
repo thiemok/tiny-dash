@@ -1,3 +1,15 @@
+## 0.3.1 (2026-10-22)
+
+### 🚀 Features
+
+- **picoDevice:** fetch the dashboard over https with certificate validation ([#19](https://github.com/thiemok/tiny-dash/pull/19), [#248](https://github.com/thiemok/tiny-dash/issues/248), [#291](https://github.com/thiemok/tiny-dash/issues/291), [#250](https://github.com/thiemok/tiny-dash/issues/250), [#292](https://github.com/thiemok/tiny-dash/issues/292))
+- **picoDevice:** configure API via API_URL and send its Host header ([#12](https://github.com/thiemok/tiny-dash/pull/12))
+
+### ❤️ Thank You
+
+- Claude Opus 5.5
+- Thiemo
+
 ## 0.3.0 (2026-10-21)
 
 ### 🚀 Features
