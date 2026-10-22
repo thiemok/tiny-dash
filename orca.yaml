@@ -16,10 +16,9 @@ scripts:
       fi
     done
 
-    # The copied go.work may predate modules added on this branch (e.g. netkit)
-    # or list an older go version than the modules require.
-    if [ -f go.work ]; then
-      go work use $(ls -d */go.mod | xargs -n1 dirname)
-    fi
+    # The copied go.work may be missing, predate modules added on this branch
+    # (e.g. netkit), or list an older go version than the modules require.
+    [ -f go.work ] || go work init
+    go work use $(ls -d */go.mod | xargs -n1 dirname)
 
     pnpm install --frozen-lockfile

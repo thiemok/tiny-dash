@@ -1,6 +1,6 @@
 module github.com/thiemok/tiny-dash/picoDevice
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/soypat/cyw43439 v0.1.2-0.20261015151841-318d5aff4d24

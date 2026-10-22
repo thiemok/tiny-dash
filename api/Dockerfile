@@ -3,7 +3,7 @@
 # ---- build stage --------------------------------------------------------------
 # Build context is the api/ module, which is a standalone Go module with no
 # replace directives to sibling modules, so it compiles in isolation.
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 
 WORKDIR /src
 

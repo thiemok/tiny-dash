@@ -136,9 +136,24 @@ The API returns raw packed pixel data that matches the e-ink display's framebuff
 
 ### Prerequisites
 
-- **For picoDevice**: TinyGo 0.43+
-- **For API**: Go 1.21+
+- **Go**: the version pinned in [`.go-version`](.go-version) (1.26.x). goenv picks it up
+  automatically and CI reads it via `actions/setup-go`. Every module declares `go 1.26.0`.
+- **For picoDevice**: TinyGo 0.43+ (TinyGo 0.43 builds with Go 1.26)
 - **Build Tools**: Nx (for workspace management)
+
+### Go workspace (`go.work`)
+
+`go.work` is gitignored, so each checkout keeps its own. Create or refresh it with:
+
+```bash
+go work init    # only if go.work does not exist yet
+go work use $(ls -d */go.mod | xargs -n1 dirname)
+```
+
+`go work use` also raises the `go` line of a stale `go.work`. Run it whenever a module is
+added or a go.mod's `go` version is bumped; otherwise every build fails with
+`module X listed in go.work file requires go >= ..., but go.work lists go ...`.
+Orca worktree setup (`orca.yaml`) runs it automatically.
 
 ### Workspace Structure
 

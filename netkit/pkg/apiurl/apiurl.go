@@ -4,12 +4,19 @@
 // Parsing is meant to run once at startup; the accessors on URL do not
 // allocate except where noted, so the result can be used in allocation-free
 // request loops.
+//
+// The parser deliberately avoids net/url: since Go 1.26 url.Parse consults
+// the urlstrictcolons GODEBUG, which links internal/godebug and its settings
+// table into TinyGo binaries (about 1.8 KB of RAM and 7 KB of flash on the
+// RP2350). Every URL it accepts is parsed exactly as url.Parse with Go 1.26's
+// strict-colon rule would; it additionally rejects percent-escapes in host
+// names and IPv6 zones, and host bytes outside RFC 3986. FuzzParseMatchesNetURL
+// checks both.
 package apiurl
 
 import (
 	"errors"
 	"net/netip"
-	"net/url"
 	"strconv"
 	"strings"
 )
@@ -26,7 +33,10 @@ var (
 	ErrEmpty             = errors.New("apiurl: empty URL")
 	ErrUnsupportedScheme = errors.New("apiurl: scheme must be http or https")
 	ErrMissingHost       = errors.New("apiurl: missing host")
+	ErrInvalidHost       = errors.New("apiurl: invalid host")
 	ErrInvalidPort       = errors.New("apiurl: invalid port")
+	ErrInvalidPath       = errors.New("apiurl: invalid path escape")
+	ErrInvalidChar       = errors.New("apiurl: control character in URL")
 	ErrUserinfo          = errors.New("apiurl: userinfo is not supported")
 	ErrQueryOrFragment   = errors.New("apiurl: query and fragment are not supported")
 )
@@ -54,15 +64,14 @@ func Parse(s string) (URL, error) {
 	if s == "" {
 		return URL{}, ErrEmpty
 	}
-	pu, err := url.Parse(s)
-	if err != nil {
-		if !strings.Contains(s, "://") {
-			return URL{}, ErrUnsupportedScheme
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return URL{}, ErrInvalidChar
 		}
-		return URL{}, err
 	}
 	var u URL
-	switch strings.ToLower(pu.Scheme) {
+	scheme, rest, _ := strings.Cut(s, ":")
+	switch strings.ToLower(scheme) {
 	case SchemeHTTP:
 		u.Scheme, u.Port = SchemeHTTP, DefaultPortHTTP
 	case SchemeHTTPS:
@@ -70,34 +79,48 @@ func Parse(s string) (URL, error) {
 	default:
 		return URL{}, ErrUnsupportedScheme
 	}
-	if pu.Opaque != "" {
+
+	// An empty fragment ("#" at the end) is dropped, as url.Parse does.
+	rest, fragment, _ := strings.Cut(rest, "#")
+	rest, _, hasQuery := strings.Cut(rest, "?")
+	rest, ok := strings.CutPrefix(rest, "//")
+	if !ok {
 		return URL{}, ErrMissingHost
 	}
-	if pu.User != nil {
+	authority, path := rest, ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		authority, path = rest[:i], rest[i:]
+	}
+	if strings.IndexByte(authority, '@') >= 0 {
 		return URL{}, ErrUserinfo
 	}
-	if pu.RawQuery != "" || pu.ForceQuery || pu.Fragment != "" {
+	if hasQuery || fragment != "" {
 		return URL{}, ErrQueryOrFragment
 	}
 
-	u.Host = strings.ToLower(pu.Hostname())
+	host, port, err := splitHostPort(authority)
+	if err != nil {
+		return URL{}, err
+	}
+	u.Host = strings.ToLower(host)
 	if u.Host == "" {
 		return URL{}, ErrMissingHost
 	}
-	if p := pu.Port(); p != "" {
-		n, err := strconv.ParseUint(p, 10, 16)
+	if port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
 		if err != nil || n == 0 {
 			return URL{}, ErrInvalidPort
 		}
 		u.Port = uint16(n)
-	} else if strings.HasSuffix(pu.Host, ":") {
-		return URL{}, ErrInvalidPort
 	}
 	if addr, err := netip.ParseAddr(u.Host); err == nil {
 		u.Addr = addr
 	}
 
-	u.PathPrefix = strings.TrimRight(pu.EscapedPath(), "/")
+	if path, err = escapePath(path); err != nil {
+		return URL{}, err
+	}
+	u.PathPrefix = strings.TrimRight(path, "/")
 
 	hh := u.Host
 	if u.Addr.Is6() {
@@ -108,6 +131,135 @@ func Parse(s string) (URL, error) {
 	}
 	u.hostHeader = hh
 	return u, nil
+}
+
+// splitHostPort splits an authority into host and port. A present but empty
+// port (trailing ':') is an error. Bracketed hosts must be IPv6 literals; a
+// zone must be introduced by "%25" and is limited to unreserved characters,
+// a subset of what url.Parse accepts that keeps it safe in a Host header.
+func splitHostPort(authority string) (host, port string, err error) {
+	hostPort := ""
+	if strings.HasPrefix(authority, "[") {
+		end := strings.IndexByte(authority, ']')
+		if end < 0 {
+			return "", "", ErrInvalidHost
+		}
+		host, hostPort = authority[1:end], authority[end+1:]
+		if hostPort != "" && hostPort[0] != ':' {
+			return "", "", ErrInvalidHost
+		}
+		addr, zone, hasZone := strings.Cut(host, "%25")
+		if strings.IndexByte(addr, '%') >= 0 || hasZone && !isUnreservedString(zone) {
+			return "", "", ErrInvalidHost
+		}
+		if hasZone {
+			host = addr + "%" + zone
+		}
+		if ip, err := netip.ParseAddr(host); err != nil || ip.Is4() {
+			return "", "", ErrInvalidHost
+		}
+	} else {
+		host = authority
+		if i := strings.IndexByte(authority, ':'); i >= 0 {
+			host, hostPort = authority[:i], authority[i:]
+		}
+		for i := 0; i < len(host); i++ {
+			if !validHostByte(host[i]) {
+				return "", "", ErrInvalidHost
+			}
+		}
+	}
+	if hostPort == "" {
+		return host, "", nil
+	}
+	port = hostPort[1:]
+	if port == "" {
+		return "", "", ErrInvalidPort
+	}
+	for i := 0; i < len(port); i++ {
+		if port[i] < '0' || port[i] > '9' {
+			return "", "", ErrInvalidPort
+		}
+	}
+	return host, port, nil
+}
+
+func validHostByte(c byte) bool {
+	return c >= 0x80 || isUnreserved(c) || strings.IndexByte("!$&'()*+,;=", c) >= 0
+}
+
+func isUnreservedString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isUnreserved(s[i]) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func isUnreserved(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' ||
+		c == '-' || c == '.' || c == '_' || c == '~'
+}
+
+// escapePath returns p as url.URL.EscapedPath does: unchanged when it is
+// validly encoded, otherwise fully unescaped and re-escaped, which also
+// decodes escapes of characters that need none (e.g. "%41" becomes "A").
+func escapePath(p string) (string, error) {
+	const hex = "0123456789ABCDEF"
+	valid := true
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c == '%':
+			if i+2 >= len(p) || !isHex(p[i+1]) || !isHex(p[i+2]) {
+				return "", ErrInvalidPath
+			}
+			i += 2
+		case !validPathByte(c):
+			valid = false
+		}
+	}
+	if valid {
+		return p, nil
+	}
+	b := make([]byte, 0, 3*len(p))
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c == '%' {
+			c = unhex(p[i+1])<<4 | unhex(p[i+2])
+			i += 2
+		}
+		if keepPathByte(c) {
+			b = append(b, c)
+		} else {
+			b = append(b, '%', hex[c>>4], hex[c&0xf])
+		}
+	}
+	return string(b), nil
+}
+
+// validPathByte reports whether c may appear unescaped in an encoded path.
+func validPathByte(c byte) bool {
+	return c < 0x80 && (isUnreserved(c) || strings.IndexByte("/!$&'()*+,;=:@[]", c) >= 0)
+}
+
+// keepPathByte reports whether c is left unescaped when encoding a path.
+func keepPathByte(c byte) bool {
+	return c < 0x80 && (isUnreserved(c) || strings.IndexByte("/$&+,;=:@", c) >= 0)
+}
+
+func unhex(c byte) byte {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0'
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10
+	}
+	return c - 'A' + 10
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
 }
 
 // IsIPLiteral reports whether Host is an IP address rather than a name.
