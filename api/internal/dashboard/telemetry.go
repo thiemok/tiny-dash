@@ -18,6 +18,8 @@ var (
 	attrDataSource = attribute.Key("tinydash.datasource")
 	// attrRenderOutput is the image format produced by a render: packed or png.
 	attrRenderOutput = attribute.Key("tinydash.render.output")
+	// attrRenderDither is whether a render was dithered (true) or snapped to the nearest palette colors (false).
+	attrRenderDither = attribute.Key("tinydash.render.dither")
 )
 
 var (
@@ -26,7 +28,7 @@ var (
 		metric.WithUnit("{failure}"),
 	))
 	renderDuration = instrument(meter.Float64Histogram("tinydash.render.duration",
-		metric.WithDescription("Time to produce a dashboard image: Chrome capture, dithering and encoding."),
+		metric.WithDescription("Time to produce a dashboard image: Chrome capture, palette reduction and encoding."),
 		metric.WithUnit("s"),
 	))
 )

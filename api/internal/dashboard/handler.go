@@ -69,6 +69,7 @@ type eventView struct {
 	Ongoing  bool
 	Source   string       // short calendar label
 	Color    template.CSS // accent color for the calendar source
+	Ink      template.CSS // text color that reads on Color
 }
 
 // calendarView holds events for today, grouped for display.
@@ -81,7 +82,6 @@ type calendarView struct {
 type departureRow struct {
 	Line       string
 	Direction  string
-	TimeStr    string
 	Minutes    int    // minutes until departure
 	MinutesStr string // "now", "5 min", "1 h 10"
 	Delay      int    // minutes late (0 = on time)
@@ -93,6 +93,10 @@ type departureRow struct {
 type departuresView struct {
 	Departures []departureRow
 }
+
+// forecastSlots is how many hourly forecast entries fit the weather card at a
+// legible size.
+const forecastSlots = 4
 
 // conditionClass maps HA weather condition strings to CSS class names for icons.
 var conditionClass = map[string]string{
@@ -136,7 +140,8 @@ type templateData struct {
 	Height       int
 	Time         string
 	Cells        []hourCell // 24-hour day-curve clock strip
-	Date         string
+	Weekday      string
+	Day          string
 	Swatches     []template.CSS
 	ShowSwatches bool
 	Weather      *weatherView
@@ -179,17 +184,18 @@ func (h *DashboardHandler) newTemplateData(ctx context.Context, width, height in
 		Height:   height,
 		Time:     now.Format("15:04"),
 		Cells:    hourCells(now),
-		Date:     now.Format("Mon, 02 Jan '06"),
+		Weekday:  strings.ToUpper(now.Format("Monday")),
+		Day:      now.Format("2 Jan"),
 		Swatches: swatches,
 	}
 
 	if mock {
 		data.Weather = mockWeather(now)
-		data.Calendar = mockCalendar(now)
+		data.Calendar = mockCalendar(now, calendarColors(palette))
 		data.Departures = mockDepartures(now)
 	} else {
 		data.Weather = h.fetchWeather(ctx)
-		data.Calendar = h.fetchCalendar(ctx, now)
+		data.Calendar = h.fetchCalendar(ctx, now, calendarColors(palette))
 		data.Departures = h.fetchDepartures(ctx, now)
 	}
 
@@ -241,14 +247,9 @@ func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time) *
 
 	view := &departuresView{}
 	for _, d := range departures {
-		t := d.Estimated
-		if t.IsZero() {
-			t = d.Planned
-		}
 		row := departureRow{
 			Line:      d.Line,
 			Direction: d.Direction,
-			TimeStr:   t.Format("15:04"),
 			Minutes:   d.MinutesUntil(now),
 			Delay:     d.DelayMinutes(),
 			Cancelled: d.Cancelled,
@@ -261,13 +262,37 @@ func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time) *
 	return view
 }
 
+// calendarColor is a source calendar's accent and the text color that
+// reads on top of it (all-day events render as filled bars).
+type calendarColor struct {
+	Index byte // panel color index of Fill
+	Fill  template.CSS
+	Ink   template.CSS
+}
+
 // calendarPalette assigns an accent color per source calendar (cycled).
-// Keeps the count low to stay within the limited color budget.
-var calendarPalette = []template.CSS{
-	"#0044cc", // blue
-	"#c00000", // red
-	"#008055", // green
-	"#e08000", // orange
+// Only exact panel colors (see designColors), so the image needs no dithering.
+var calendarPalette = []calendarColor{
+	{5, "#0000ff", "#ffffff"}, // blue
+	{3, "#ff0000", "#ffffff"}, // red
+	{6, "#00ff00", "#000000"}, // green
+	{2, "#ffff00", "#000000"}, // yellow
+}
+
+// calendarColors returns the calendar accents the display can show. A color
+// it lacks would be dithered into something else (green turns black on a
+// black/white/yellow/red panel), hiding the text drawn on it.
+func calendarColors(palette render.Palette) []calendarColor {
+	var colors []calendarColor
+	for _, c := range calendarPalette {
+		if palette.Covers([]byte{c.Index}) {
+			colors = append(colors, c)
+		}
+	}
+	if len(colors) == 0 {
+		return []calendarColor{{0, "#000000", "#ffffff"}}
+	}
+	return colors
 }
 
 // shortCalendarLabel derives a short, human-readable label from an HA
@@ -286,7 +311,7 @@ func shortCalendarLabel(entityID string) string {
 	return strings.ToUpper(name[:1]) + name[1:]
 }
 
-func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time) *calendarView {
+func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time, colors []calendarColor) *calendarView {
 	ids := h.config.Calendar.EntityIDs
 	if len(ids) == 0 {
 		return nil
@@ -301,9 +326,9 @@ func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time) *ca
 		return nil
 	}
 
-	colorByID := make(map[string]template.CSS, len(ids))
+	colorByID := make(map[string]calendarColor, len(ids))
 	for i, id := range ids {
-		colorByID[id] = calendarPalette[i%len(calendarPalette)]
+		colorByID[id] = colors[i%len(colors)]
 	}
 
 	view := &calendarView{}
@@ -313,11 +338,16 @@ func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time) *ca
 			Location: ev.Location,
 			AllDay:   ev.AllDay,
 			Source:   shortCalendarLabel(ev.EntityID),
-			Color:    colorByID[ev.EntityID],
+			Color:    colorByID[ev.EntityID].Fill,
+			Ink:      colorByID[ev.EntityID].Ink,
 		}
 		if ev.AllDay {
 			entry.TimeStr = "All day"
 			view.AllDay = append(view.AllDay, entry)
+			continue
+		}
+		// Finished events only take space from the ones still ahead.
+		if !ev.End.After(now) {
 			continue
 		}
 		entry.TimeStr = ev.Start.Format("15:04")
@@ -367,6 +397,9 @@ func (h *DashboardHandler) fetchWeather(ctx context.Context) *weatherView {
 	}
 
 	for _, hf := range wd.HourlyForecast {
+		if len(view.HourlyForecast) == forecastSlots {
+			break
+		}
 		hIcon := conditionClass[hf.Condition]
 		if hIcon == "" {
 			hIcon = "wi-cloudy"
