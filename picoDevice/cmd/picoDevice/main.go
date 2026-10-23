@@ -295,14 +295,24 @@ func initButtons(logger *slog.Logger, display common.Display) (*common.ButtonCon
 		return nil, nil
 	}
 	buttons, led := opt.GetButtons(), opt.GetLED()
-	logger.LogAttrs(context.Background(), slog.LevelInfo, "✓ buttons", slog.Int("count", buttons.ButtonCount()), slog.Bool("led", led != nil))
+	var irq int
+	if buttons != nil {
+		// Latches presses during a fetch or panel refresh, when nothing
+		// polls, without the stack of a polling goroutine.
+		var err error
+		if irq, err = buttons.EnableInterrupts(); err != nil {
+			logger.LogAttrs(context.Background(), slog.LevelWarn, "button interrupts unavailable; presses only count between cycles", slog.Any("error", err))
+		}
+	}
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "✓ buttons", slog.Int("count", buttons.ButtonCount()),
+		slog.Int("interrupts", irq), slog.Bool("led", led != nil))
 	return buttons, led
 }
 
 // waitForFetch sleeps until sched's next fetch is due, polling buttons so a
-// press of refreshButton brings the fetch forward. Presses during the fetch
-// and the panel refresh are not seen, as nothing polls then. It reports
-// whether a press cut the wait short.
+// press of refreshButton brings the fetch forward. A press during the fetch
+// or the panel refresh was latched by the button interrupts and is handled
+// on the first poll. It reports whether a press cut the wait short.
 func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController) (pressed bool) {
 	for {
 		remaining := time.Until(sched.Next())

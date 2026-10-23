@@ -27,6 +27,14 @@ type Pin interface {
 	Get() bool
 }
 
+// InterruptPin is a Pin that can call back whenever its level changes, so
+// an input is noticed while nothing polls it. callback runs in interrupt
+// context: it must be short and must not allocate or block.
+type InterruptPin interface {
+	Pin
+	SetChangeInterrupt(callback func()) error
+}
+
 // I2C interface for EEPROM and other I2C operations
 type I2C interface {
 	// Tx performs an I2C transaction
