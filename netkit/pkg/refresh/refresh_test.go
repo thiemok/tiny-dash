@@ -162,7 +162,10 @@ func TestParseHint(t *testing.T) {
 func TestDoesNotAllocate(t *testing.T) {
 	s := New(policy)
 	b := []byte("300")
+	etag := []byte(`"0123456789abcdef"`)
+	var dst [ETagLen]byte
 	allocs := testing.AllocsPerRun(100, func() {
+		ParseETag(etag, &dst)
 		d, ok := ParseHint(b)
 		s.Succeeded(t0, d, ok)
 		s.Failed(t0, rndTop)

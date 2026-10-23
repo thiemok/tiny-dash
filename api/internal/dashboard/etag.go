@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math"
+	"slices"
 	"strconv"
 
 	"github.com/thiemok/tiny-dash/api/internal/telemetry"
@@ -50,9 +52,23 @@ func contentVersion(fsys fs.FS) (string, error) {
 
 // contentHash hashes what the page shows: data, minus the next refresh
 // time, which changes on every render without changing the pixels.
+// Temperatures are hashed as the template prints them, whole degrees, so a
+// sensor drifting by tenths does not redraw the panel. Fields the template
+// does not show are tagged json:"-".
 func (d templateData) contentHash(version string) (string, error) {
 	d.NextRefresh = ""
 	d.ETag = ""
+	if d.Weather != nil {
+		w := *d.Weather
+		w.Temperature = shownTemp(w.Temperature)
+		w.TempHigh = shownTemp(w.TempHigh)
+		w.TempLow = shownTemp(w.TempLow)
+		w.HourlyForecast = slices.Clone(w.HourlyForecast)
+		for i := range w.HourlyForecast {
+			w.HourlyForecast[i].Temperature = shownTemp(w.HourlyForecast[i].Temperature)
+		}
+		d.Weather = &w
+	}
 	b, err := json.Marshal(d)
 	if err != nil {
 		return "", fmt.Errorf("encoding template data: %w", err)
@@ -62,6 +78,10 @@ func (d templateData) contentHash(version string) (string, error) {
 	h.Write(b)
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// shownTemp rounds t the way the template's printf "%.0f" does (half to
+// even).
+func shownTemp(t float64) float64 { return math.RoundToEven(t) }
 
 // imageETag is the quoted ETag of the packed image made from a page with
 // content hash pageHash: the packing's color depth is not part of the page.

@@ -250,6 +250,8 @@ func main() {
 		default:
 			if err = display.Update(); err != nil {
 				ok = false
+				// The panel may be left half drawn: never answer it with a 304.
+				f.forgetImage()
 				logger.LogAttrs(ctx, slog.LevelError, "display update failed", slog.Any("error", err))
 				break
 			}

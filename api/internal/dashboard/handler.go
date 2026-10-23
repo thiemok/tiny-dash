@@ -60,7 +60,7 @@ type hourlyForecastView struct {
 // weatherView holds weather data for template rendering.
 type weatherView struct {
 	Temperature    float64
-	Condition      string
+	Condition      string `json:"-"` // shown only as Icon, so not hashed (contentHash)
 	Icon           string
 	TempHigh       float64
 	TempLow        float64
@@ -76,7 +76,7 @@ type eventView struct {
 	Location string
 	AllDay   bool
 	Ongoing  bool
-	Source   string       // short calendar label
+	Source   string       `json:"-"` // short calendar label; not shown, so not hashed (contentHash)
 	Color    template.CSS // accent color for the calendar source
 	Ink      template.CSS // text color that reads on Color
 }
@@ -95,7 +95,7 @@ type departureRow struct {
 	Time      string // planned departure, "15:04"; Delay is shown next to it
 	Delay     int    // minutes late (0 = on time)
 	Cancelled bool
-	Alerts    bool
+	Alerts    bool `json:"-"` // not shown, so not hashed (contentHash)
 }
 
 // departuresView holds the list of upcoming departures.
