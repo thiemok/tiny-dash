@@ -51,11 +51,11 @@ func main() {
 	if chromePath != "" {
 		slog.InfoContext(ctx, "using custom Chrome executable", "path", chromePath)
 	}
-	renderer, err := render.NewRenderer(chromePath)
+	renderer, err := render.NewRenderer(ctx, chromePath)
 	if err != nil {
 		fatal(ctx, "failed to start renderer", err)
 	}
-	defer renderer.Close()
+	defer renderer.Close(ctx)
 
 	dashHandler, err := dashboard.NewDashboardHandler(api.TemplateFS, haClient, cfg)
 	if err != nil {
@@ -82,8 +82,9 @@ func main() {
 		}
 	}()
 
+	// SIGHUP (closed terminal or session) shuts down gracefully too, so Chrome is not orphaned.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	<-sigCh
 	slog.InfoContext(ctx, "Shutting down...")
 

@@ -3,9 +3,11 @@ package render
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
+	"log/slog"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -20,15 +22,18 @@ import (
 
 var tracer = otel.Tracer("github.com/thiemok/tiny-dash/api/internal/render")
 
+// closeTimeout bounds the graceful Browser.close before Chrome is killed.
+const closeTimeout = 5 * time.Second
+
 // Renderer captures screenshots of URLs using a long-lived Chrome instance.
 type Renderer struct {
-	allocCtx    context.Context
+	browserCtx  context.Context
 	allocCancel context.CancelFunc
 }
 
 // NewRenderer creates a Renderer with a headless Chrome browser.
 // If execPath is non-empty, it is used as the Chrome binary (e.g. a flatpak wrapper script).
-func NewRenderer(execPath string) (*Renderer, error) {
+func NewRenderer(ctx context.Context, execPath string) (*Renderer, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
@@ -36,24 +41,31 @@ func NewRenderer(execPath string) (*Renderer, error) {
 	if execPath != "" {
 		opts = append(opts, chromedp.ExecPath(execPath))
 	}
+	// Chrome outlives any single request, so it is not tied to ctx.
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 
-	// Create a persistent browser context to reuse across requests.
+	// Create a persistent browser context to reuse across requests. Its cancel
+	// is not needed: Close shuts it down via chromedp.Cancel.
 	browserCtx, _ := chromedp.NewContext(allocCtx)
+	r := &Renderer{browserCtx: browserCtx, allocCancel: allocCancel}
 	// Navigate to a blank page to start the browser process.
 	if err := chromedp.Run(browserCtx); err != nil {
-		allocCancel()
+		// Chrome may have started even though the first Run failed.
+		r.Close(ctx)
 		return nil, fmt.Errorf("starting chrome: %w", err)
 	}
 
-	return &Renderer{
-		allocCtx:    browserCtx,
-		allocCancel: allocCancel,
-	}, nil
+	return r, nil
 }
 
-// Close shuts down the Chrome browser.
-func (r *Renderer) Close() {
+// Close shuts down the Chrome browser, gracefully via Browser.close first so
+// Chrome can tear down its own child processes, then by killing it.
+func (r *Renderer) Close(ctx context.Context) {
+	closeCtx, cancel := context.WithTimeout(r.browserCtx, closeTimeout)
+	defer cancel()
+	if err := chromedp.Cancel(closeCtx); err != nil && !errors.Is(err, context.Canceled) {
+		slog.WarnContext(ctx, "graceful chrome shutdown failed", "error", err)
+	}
 	r.allocCancel()
 }
 
@@ -67,7 +79,7 @@ func (r *Renderer) CaptureURL(ctx context.Context, url string, width, height int
 	))
 	defer span.End()
 
-	tabCtx, tabCancel := chromedp.NewContext(r.allocCtx)
+	tabCtx, tabCancel := chromedp.NewContext(r.browserCtx)
 	defer tabCancel()
 
 	carrier := propagation.MapCarrier{}
