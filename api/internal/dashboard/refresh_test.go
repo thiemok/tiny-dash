@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -169,6 +170,40 @@ func TestSetRefreshHint(t *testing.T) {
 			setRefreshHint(context.Background(), w, tt.meta, now)
 			if got := w.Header().Get(refreshHintHeader); got != tt.want {
 				t.Fatalf("%s = %q, want %q", refreshHintHeader, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeparturesRetryOnlyAfterFailedRead(t *testing.T) {
+	tests := []struct {
+		name      string
+		state     http.HandlerFunc
+		wantRetry bool
+	}{
+		{"sensor unreachable", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "down", http.StatusBadGateway)
+		}, true},
+		{"nothing upcoming", func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"entity_id":"sensor.dep","state":"","attributes":{"times":[]}}`))
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(tt.state)
+			defer srv.Close()
+			h := &DashboardHandler{
+				haClient: homeassistant.NewClient(srv.URL, "token"),
+				config:   &config.Config{Departures: config.DeparturesConfig{EntityIDs: []string{"sensor.dep"}}, Refresh: refreshCfg},
+			}
+			now := time.Now()
+			var cs changes
+			if view := h.fetchDepartures(context.Background(), now, &cs); view != nil {
+				t.Fatalf("view = %+v, want nil", view)
+			}
+			retry := change{now.Add(refreshCfg.Retry), sourceDepartures}
+			if got := len(cs) == 1 && cs[0] == retry; got != tt.wantRetry {
+				t.Fatalf("changes = %v, want retry %v", cs, tt.wantRetry)
 			}
 		})
 	}

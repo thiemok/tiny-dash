@@ -3,6 +3,7 @@ package homeassistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -34,15 +35,17 @@ func (d Departure) DelayMinutes() int {
 	return int(d.Estimated.Sub(d.Planned).Round(time.Minute) / time.Minute)
 }
 
-// MinutesUntil returns the whole minutes from now until the (estimated)
-// departure. Negative if already past.
-func (d Departure) MinutesUntil(now time.Time) int {
-	t := d.Estimated
-	if t.IsZero() {
-		t = d.Planned
+// Leaves is when the departure leaves: estimated, else planned.
+func (d Departure) Leaves() time.Time {
+	if d.Estimated.IsZero() {
+		return d.Planned
 	}
-	return int(t.Sub(now).Round(time.Minute) / time.Minute)
+	return d.Estimated
 }
+
+// ErrNoDepartures is returned when the sensors were read but none lists an
+// upcoming departure.
+var ErrNoDepartures = errors.New("no upcoming departures")
 
 // time entry as exposed by the Public Transport Departures integration.
 type transitTime struct {
@@ -144,6 +147,7 @@ func (c *Client) GetUpcomingDepartures(ctx context.Context, entityIDs []string, 
 
 	now := time.Now()
 	var all []Departure
+	read := 0
 
 	for _, id := range entityIDs {
 		state, err := c.GetState(ctx, id)
@@ -157,6 +161,7 @@ func (c *Client) GetUpcomingDepartures(ctx context.Context, entityIDs []string, 
 			slog.WarnContext(ctx, "departures decode failed", "entity_id", id, "error", err)
 			continue
 		}
+		read++
 
 		for _, t := range attrs.Times {
 			d := Departure{
@@ -202,7 +207,10 @@ func (c *Client) GetUpcomingDepartures(ctx context.Context, entityIDs []string, 
 	}
 	span.SetAttributes(attribute.Int("homeassistant.departures.count", len(all)))
 	if len(all) == 0 {
-		return nil, telemetry.RecordError(span, fmt.Errorf("no upcoming departures across %d sensors", len(entityIDs)))
+		if read == 0 {
+			return nil, telemetry.RecordError(span, fmt.Errorf("none of %d departure sensors could be read", len(entityIDs)))
+		}
+		return nil, telemetry.RecordError(span, fmt.Errorf("%w across %d sensors", ErrNoDepartures, len(entityIDs)))
 	}
 	return all, nil
 }

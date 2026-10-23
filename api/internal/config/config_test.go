@@ -76,3 +76,20 @@ func TestRefreshInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestRefreshUnsetMinFollowsMax(t *testing.T) {
+	cfg, err := loadYAML(t, `
+refresh:
+  max: 1m
+  quietHours:
+    start: "23:00"
+    end: "06:00"
+    max: 30m
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := cfg.Refresh; r.Min != time.Minute || r.QuietHours.Min != 30*time.Minute {
+		t.Fatalf("min = %v, quiet min = %v; want 1m, 30m", r.Min, r.QuietHours.Min)
+	}
+}

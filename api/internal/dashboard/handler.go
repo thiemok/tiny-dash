@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -174,7 +175,6 @@ func hourCells(now time.Time, step time.Duration) []hourCell {
 	return cells
 }
 
-// clockStepAt is the clock strip's step at now.
 func (h *DashboardHandler) clockStepAt(now time.Time) time.Duration {
 	if quiet, _ := quietHours(now, h.config.Refresh.QuietHours); quiet {
 		return quietClockStep
@@ -229,7 +229,6 @@ func (h *DashboardHandler) decideRefresh(ctx context.Context, now time.Time, cs 
 	return d.At
 }
 
-// sectionFailed schedules a retry for a section that failed to load.
 func (h *DashboardHandler) sectionFailed(now time.Time, cs *changes, source string) {
 	cs.add(now, now.Add(h.config.Refresh.Retry), source)
 }
@@ -269,7 +268,10 @@ func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time, c
 	departures, err := h.haClient.GetUpcomingDepartures(ctx, ids, 0)
 	if err != nil {
 		fetchFailed(ctx, span, "departures", err)
-		h.sectionFailed(now, cs, sourceDepartures)
+		// An empty board is current data; only a failed read is worth retrying.
+		if !errors.Is(err, homeassistant.ErrNoDepartures) {
+			h.sectionFailed(now, cs, sourceDepartures)
+		}
 		return nil
 	}
 	return departureRows(departures, now, cs)
@@ -281,10 +283,7 @@ func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time, c
 func departureRows(departures []homeassistant.Departure, now time.Time, cs *changes) *departuresView {
 	view := &departuresView{}
 	for _, d := range departures {
-		leaves := d.Estimated
-		if leaves.IsZero() {
-			leaves = d.Planned
-		}
+		leaves := d.Leaves()
 		row := departureRow{
 			Line:      d.Line,
 			Direction: d.Direction,

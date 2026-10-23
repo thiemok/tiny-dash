@@ -104,11 +104,12 @@ func Load() (*Config, error) {
 }
 
 func (r *RefreshConfig) applyDefaults() error {
-	setDefault(&r.Min, defaultRefreshMin)
+	// An unset min never exceeds a configured max.
 	setDefault(&r.Max, defaultRefreshMax)
+	setDefault(&r.Min, min(defaultRefreshMin, r.Max))
 	setDefault(&r.Retry, defaultRefreshRetry)
-	setDefault(&r.QuietHours.Min, defaultQuietMin)
 	setDefault(&r.QuietHours.Max, defaultQuietMax)
+	setDefault(&r.QuietHours.Min, min(defaultQuietMin, r.QuietHours.Max))
 	if r.Min > r.Max {
 		return fmt.Errorf("min %v exceeds max %v", r.Min, r.Max)
 	}
