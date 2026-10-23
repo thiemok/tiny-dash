@@ -1,3 +1,14 @@
+## 0.4.0 (2026-10-23)
+
+### 🚀 Features
+
+- **api:** crisp e-ink text: palette-only layout, no dithering on full-color panels ([#24](https://github.com/thiemok/tiny-dash/pull/24))
+
+### ❤️ Thank You
+
+- Claude Opus 5.5
+- Thiemo
+
 ## 0.3.3 (2026-10-23)
 
 ### 🩹 Fixes
