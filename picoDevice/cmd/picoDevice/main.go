@@ -25,6 +25,7 @@ import (
 	"github.com/thiemok/tiny-dash/netkit/pkg/apiurl"
 	"github.com/thiemok/tiny-dash/netkit/pkg/backoff"
 	"github.com/thiemok/tiny-dash/netkit/pkg/bufshare"
+	"github.com/thiemok/tiny-dash/netkit/pkg/refresh"
 	"github.com/thiemok/tiny-dash/netkit/pkg/resolve"
 	"github.com/thiemok/tiny-dash/netkit/pkg/wallclock"
 	"github.com/thiemok/tiny-dash/picoDevice/internal/config"
@@ -72,6 +73,22 @@ const (
 	dnsRetries      = 3
 )
 
+// A failed fetch is retried after retryMin, doubling up to retryMax,
+// whatever delay the server asked for last.
+const (
+	retryMin = 30 * time.Second
+	retryMax = 10 * time.Minute
+)
+
+// refreshButton forces a fetch; the others are only logged, which is how
+// their wiring is checked on hardware. buttonPollTime stays below the
+// controller's 50 ms debounce so a short press is not missed.
+const (
+	refreshButton  = 0
+	buttonNames    = "ABCD"
+	buttonPollTime = 20 * time.Millisecond
+)
+
 // logBuf bounds log memory; records that arrive while it is full are dropped
 // rather than blocking the caller. At Info level the fill peaks at ~350 B
 // (the startup burst), so 1 KiB leaves about 3x headroom.
@@ -79,8 +96,9 @@ var logBuf [1024]byte
 
 const logFlushTimeout = 2 * time.Second
 
-// The image response header is ~140 bytes (Content-Length, Content-Type,
-// Date, Connection); leave room for a reverse proxy's additions.
+// The image response header is ~170 bytes (Content-Length, Content-Type,
+// Date, Connection, X-Refresh-After); leave room for a reverse proxy's
+// additions.
 const (
 	headerBufSize  = 512
 	maxHeaderPairs = 12
@@ -113,6 +131,7 @@ func main() {
 	apiURL := parseAPIURL(logger)
 	dnsFallback := parseDNSServer(logger)
 	display, requestURI := initDisplay(logger, apiURL)
+	buttons, led := initButtons(logger, display)
 	logger.Info("Initializing WiFi...")
 	// Warn keeps the driver from allocating on every reconnect: its Info-level
 	// rxEvent records carry eight attrs, beyond slog.Record's inline five.
@@ -152,7 +171,12 @@ func main() {
 	util.RequireNoError(err, "invalid NTP_SERVER "+config.NTPServer)
 	f.hdr.ConfigBufferGrowth(false)
 	f.hdr.Reset(f.hdrBuf, maxHeaderPairs)
-	refreshDuration := time.Duration(config.RefreshInterval) * time.Second
+	sched := refresh.New(refresh.Policy{
+		Default: time.Duration(config.RefreshInterval) * time.Second,
+		Min:     time.Duration(config.MinRefreshInterval) * time.Second,
+		Max:     time.Duration(config.MaxRefreshInterval) * time.Second,
+		Retry:   backoff.Exponential{Min: retryMin, Max: retryMax},
+	})
 	ctx := context.Background()
 	var prev, cur runtime.MemStats
 
@@ -212,6 +236,9 @@ func main() {
 				slog.Duration("handshake", f.handshakeTook()), slog.Duration("body", f.bodyTook))
 		}
 		f.imageReady = false
+		if led != nil {
+			led.Off()
+		}
 
 		if memTestGC {
 			// Leaves only live objects in heapAlloc, so a leak shows as growth.
@@ -240,9 +267,66 @@ func main() {
 		if debugBuild && cycle == wifiTestOutageAfterCycle {
 			link.simulateOutage(wifiTestOutageFailJoins)
 		}
-		if fetchFailures < maxFetchFailures {
-			time.Sleep(refreshDuration)
+		if fetchFailures >= maxFetchFailures {
+			// Reconnect at once; the wait would only delay it.
+			continue
 		}
+		if ok {
+			wait, src := sched.Succeeded(f.respondedAt, f.hint, f.hintOK)
+			logger.LogAttrs(ctx, slog.LevelInfo, "next fetch", slog.Duration("in", time.Until(sched.Next())),
+				slog.Duration("interval", wait), slog.String("source", src.String()))
+		} else {
+			wait := sched.Failed(time.Now(), rand32())
+			logger.LogAttrs(ctx, slog.LevelInfo, "next fetch", slog.Duration("in", wait),
+				slog.String("source", refresh.SourceRetry.String()), slog.Uint64("failures", uint64(sched.Failures())))
+		}
+		if waitForFetch(logger, sched, buttons) && led != nil {
+			// Lit until the forced refresh is on the panel.
+			led.On()
+		}
+	}
+}
+
+// initButtons returns the display's buttons and LED, either nil if the board
+// has none.
+func initButtons(logger *slog.Logger, display common.Display) (*common.ButtonController, *common.LEDController) {
+	opt, ok := display.(common.OptionalFeatures)
+	if !ok {
+		return nil, nil
+	}
+	buttons, led := opt.GetButtons(), opt.GetLED()
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "✓ buttons", slog.Int("count", buttons.ButtonCount()), slog.Bool("led", led != nil))
+	return buttons, led
+}
+
+// waitForFetch sleeps until sched's next fetch is due, polling buttons so a
+// press of refreshButton brings the fetch forward. Presses during the fetch
+// and the panel refresh are not seen, as nothing polls then. It reports
+// whether a press cut the wait short.
+func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController) (pressed bool) {
+	for {
+		remaining := time.Until(sched.Next())
+		if remaining <= 0 {
+			return pressed
+		}
+		if buttons != nil {
+			buttons.Poll()
+			for i := range buttons.ButtonCount() {
+				if !buttons.WasPressed(i) {
+					continue
+				}
+				name := buttonNames[i : i+1]
+				if i != refreshButton {
+					logger.LogAttrs(context.Background(), slog.LevelInfo, "button pressed", slog.String("button", name))
+					continue
+				}
+				pressed = true
+				due := sched.Press(time.Now())
+				logger.LogAttrs(context.Background(), slog.LevelInfo, "button pressed", slog.String("button", name),
+					slog.String("action", "refresh"), slog.Duration("in", time.Until(due)))
+			}
+		}
+		time.Sleep(min(remaining, buttonPollTime))
 	}
 }
 
@@ -429,6 +513,12 @@ type fetcher struct {
 	tls      *tlsClient
 	bodyTook time.Duration
 
+	// The last 200 response's refresh.HintHeader, hintOK false if it had
+	// none, and when its header arrived.
+	hint        time.Duration
+	hintOK      bool
+	respondedAt time.Time
+
 	ipbuf [len("255.255.255.255")]byte
 }
 
@@ -477,6 +567,7 @@ func nanotime() int64 { return int64(time.Since(bootTime)) }
 // stage alongside the error so that callers need not wrap it.
 func (f *fetcher) fetch() (stage string, err error) {
 	f.imageReady = false
+	f.hintOK = false
 	if f.tls != nil && !f.tls.clock.Synced() {
 		return "clock", errClockNotSynced
 	}
@@ -596,6 +687,9 @@ func (f *fetcher) fetch() (stage string, err error) {
 			slog.String("status", bytesString(statusCode)), slog.String("statusText", bytesString(statusText)))
 		return "status", errHTTPStatus
 	}
+
+	f.respondedAt = time.Now()
+	f.hint, f.hintOK = refresh.ParseHint(hdr.GetFold(refresh.HintHeader))
 
 	initialBody, err := hdr.Body()
 	if err != nil {

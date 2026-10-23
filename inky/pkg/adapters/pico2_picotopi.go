@@ -44,6 +44,8 @@ func (p *Pico2Pin) Configure(mode inky.PinMode) error {
 	switch mode {
 	case inky.PinInput:
 		p.pin.Configure(machine.PinConfig{Mode: machine.PinInput})
+	case inky.PinInputPullUp:
+		p.pin.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 	case inky.PinOutput:
 		p.pin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	}

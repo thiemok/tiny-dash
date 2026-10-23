@@ -35,8 +35,9 @@ func NewButtonController(pins []Pin, debounceTime time.Duration) (*ButtonControl
 			continue
 		}
 
-		// Configure pin as input
-		if err := pin.Configure(PinInput); err != nil {
+		// The buttons only pull the pin to ground; without the pull-up a
+		// released button floats and reads as random presses.
+		if err := pin.Configure(PinInputPullUp); err != nil {
 			return nil, fmt.Errorf("failed to configure button pin %d: %w", i, err)
 		}
 

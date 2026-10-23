@@ -39,7 +39,11 @@ const (
 	WifiSSID        = "$WIFI_SSID"
 	WifiPassword    = "$WIFI_PASSWORD"
 	APIURL          = "$API_URL"
-	RefreshInterval = $REFRESH_INTERVAL
+	// RefreshInterval is the time between fetches when the server sends no
+	// X-Refresh-After; the server's delay is clamped to [Min, Max].
+	RefreshInterval    = ${REFRESH_INTERVAL:-60}
+	MinRefreshInterval = ${MIN_REFRESH_INTERVAL:-120}
+	MaxRefreshInterval = ${MAX_REFRESH_INTERVAL:-14400}
 	// DNSServer is used only when DHCP offers no DNS server; empty disables it.
 	DNSServer = "${DNS_SERVER:-}"
 	// NTPServer is a host name, resolved via DNS before every sync, or an

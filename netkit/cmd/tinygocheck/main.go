@@ -11,6 +11,7 @@ import (
 	"github.com/thiemok/tiny-dash/netkit/pkg/bufshare"
 	"github.com/thiemok/tiny-dash/netkit/pkg/dnsquery"
 	"github.com/thiemok/tiny-dash/netkit/pkg/ntpquery"
+	"github.com/thiemok/tiny-dash/netkit/pkg/refresh"
 	"github.com/thiemok/tiny-dash/netkit/pkg/resolve"
 	"github.com/thiemok/tiny-dash/netkit/pkg/timesync"
 	"github.com/thiemok/tiny-dash/netkit/pkg/wallclock"
@@ -46,4 +47,8 @@ func main() {
 	println(clock.Nanotime(), err == nil)
 	sched := timesync.New(timesync.Policy{Interval: time.Hour, Retry: b})
 	println(sched.Due(time.Now()))
+	rs := refresh.New(refresh.Policy{Default: time.Minute, Min: time.Minute, Max: time.Hour, Retry: b})
+	hint, ok := refresh.ParseHint([]byte("300"))
+	d, src := rs.Succeeded(time.Now(), hint, ok)
+	println(d.String(), src.String())
 }

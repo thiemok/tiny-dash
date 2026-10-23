@@ -6,6 +6,9 @@ type PinMode uint8
 const (
 	PinInput PinMode = iota
 	PinOutput
+	// PinInputPullUp is an input with the internal pull-up enabled, for
+	// active-low switches that only connect the pin to ground.
+	PinInputPullUp
 )
 
 // Pin interface for GPIO operations
