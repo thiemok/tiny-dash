@@ -21,9 +21,11 @@
             }
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-              /* A heavy-stemmed sans at 16px+ survives the 800x480 panel; the
-                 old Courier New fell back to the thin Liberation Mono. */
+              /* Bold sans throughout: without antialiasing, regular weight
+                 renders 1px stems that look faint on the panel, bold gets 2-3px.
+                 Hierarchy comes from size, color and inversion instead. */
               font-family: 'Liberation Sans', 'Noto Sans', Arial, sans-serif;
+              font-weight: bold;
               background: var(--paper);
               color: var(--ink);
               width: {{.Width}}px;
@@ -101,7 +103,9 @@
             .content {
               flex: 1;
               display: grid;
-              grid-template-columns: 1fr 1fr;
+              /* minmax(0, ...) keeps the halves equal: a plain 1fr track
+                 grows to fit unbreakable rows like long departure names. */
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
               gap: 12px;
               min-height: 0;
             }
