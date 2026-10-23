@@ -104,7 +104,7 @@ func mockDepartures(now time.Time) *departuresView {
 		{"709", "D-G'heim, Krankenhaus", 4, 1, false},
 		{"S11", "D-Flughafen Terminal", 6, 0, false},
 		{"U70", "Krefeld Rheinstr.", 9, 0, false},
-		{"S8", "Hagen Hbf", 12, 3, false},
+		{"S8", "Hagen Hbf", 12, 13, false},
 		{"709", "D-G'heim, Krankenhaus", 14, 0, false},
 		{"RE5", "Koblenz Hbf", 17, 0, true},
 		{"S11", "Bergisch Gladbach", 21, 0, false},

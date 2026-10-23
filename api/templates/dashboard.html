@@ -319,15 +319,15 @@
             .dep-row {
               display: flex;
               align-items: center;
-              gap: 8px;
+              gap: 6px;
               height: 29px;
-              font-size: 19px;
+              font-size: 17px;
             }
             .dep-line {
-              flex: 0 0 46px;
+              flex: 0 0 42px;
               text-align: center;
               font-weight: bold;
-              font-size: 17px;
+              font-size: 15px;
               background: var(--ink);
               color: var(--paper);
               padding: 1px 0;
@@ -339,17 +339,21 @@
               text-overflow: ellipsis;
               white-space: nowrap;
             }
+            /* Fixed-width column so delays up to "+99" line up and the
+               countdowns stay in one column whether a row is late or not. */
             .dep-delay {
+              flex: 0 0 34px;
+              text-align: right;
               color: var(--red);
               font-weight: bold;
               font-size: 16px;
             }
             .dep-eta {
               flex: 0 0 auto;
-              min-width: 64px;
+              min-width: 60px;
               text-align: right;
               font-weight: bold;
-              font-size: 21px;
+              font-size: 19px;
               white-space: nowrap;
             }
             .dep-soon .dep-eta {
