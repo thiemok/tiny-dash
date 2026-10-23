@@ -1,3 +1,14 @@
+## 0.4.1 (2026-10-23)
+
+### 🩹 Fixes
+
+- **api:** stop leaking headless Chrome processes and profiles ([#30](https://github.com/thiemok/tiny-dash/pull/30))
+
+### ❤️ Thank You
+
+- Claude Opus 5.5
+- Thiemo
+
 ## 0.4.0 (2026-10-23)
 
 ### 🚀 Features
