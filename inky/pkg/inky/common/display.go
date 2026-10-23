@@ -81,7 +81,7 @@ func (fb *framebufferImpl) SetPixel(x, y int, color Color) {
 
 	mask := getBitMask(partialIndex, fb.colorDepth)
 
-	fb.data[byteIndex] = (fb.data[byteIndex] & ^mask) | ((byte(color) << (partialIndex * fb.colorDepth)) & mask)
+	fb.data[byteIndex] = (fb.data[byteIndex] & ^mask) | ((byte(color) << pixelShift(partialIndex, fb.colorDepth)) & mask)
 }
 
 // GetPixel returns the color of a pixel at the specified coordinates
@@ -99,7 +99,7 @@ func (fb *framebufferImpl) GetPixel(x, y int) Color {
 
 	mask := getBitMask(partialIndex, fb.colorDepth)
 
-	return Color((fb.data[byteIndex] & mask) >> (partialIndex * fb.colorDepth))
+	return Color((fb.data[byteIndex] & mask) >> pixelShift(partialIndex, fb.colorDepth))
 }
 
 func (fb *framebufferImpl) Width() int {
@@ -119,8 +119,16 @@ func (fb *framebufferImpl) Buffer() []byte {
 	return fb.data[:]
 }
 
+// pixelShift returns the bit offset of the idx-th pixel within its byte.
+// Pixels are packed most significant bits first: the leftmost pixel of a
+// byte sits in its high bits, as the display controllers expect (Pimoroni's
+// drivers pack 4-bit pairs as buf[0]<<4 | buf[1] and 1-bit rows with
+// numpy.packbits). LSB-first packing swaps neighbouring pixels on the panel.
+func pixelShift(idx, depth int) int {
+	return 8 - (idx+1)*depth
+}
+
 func getBitMask(idx, depth int) byte {
-	shift := idx * depth
 	base := (1 << depth) - 1
-	return byte(base << shift)
+	return byte(base << pixelShift(idx, depth))
 }
