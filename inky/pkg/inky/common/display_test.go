@@ -307,8 +307,8 @@ func TestPackedFormatCorrectness(t *testing.T) {
 		fb := NewFramebuffer(2, 1, 4)
 		
 		// Set two pixels that share a byte
-		fb.SetPixel(0, 0, Color(0x5)) // Lower nibble
-		fb.SetPixel(1, 0, Color(0xA)) // Upper nibble
+		fb.SetPixel(0, 0, Color(0x5)) // Upper nibble
+		fb.SetPixel(1, 0, Color(0xA)) // Lower nibble
 		
 		// Check the underlying buffer
 		buf := fb.Buffer()
@@ -316,9 +316,9 @@ func TestPackedFormatCorrectness(t *testing.T) {
 			t.Fatalf("Buffer length = %d, want 1", len(buf))
 		}
 		
-		// Verify the byte contains both pixels correctly packed
-		// Lower nibble (pixel 0) should be 0x5, upper nibble (pixel 1) should be 0xA
-		expected := byte(0xA5) // 0xA in upper nibble, 0x5 in lower nibble
+		// The left pixel goes in the upper nibble, matching the controllers
+		// (Pimoroni packs buf[0]<<4 | buf[1]).
+		expected := byte(0x5A)
 		if buf[0] != expected {
 			t.Errorf("Buffer[0] = 0x%02X, want 0x%02X", buf[0], expected)
 		}
@@ -357,6 +357,11 @@ func TestPackedFormatCorrectness(t *testing.T) {
 			fb.SetPixel(i, 0, Color(i%2))
 		}
 		
+		// MSB first, like numpy.packbits: pixels 1, 3, 5, 7 set -> 0b01010101.
+		if got := fb.Buffer()[0]; got != 0x55 {
+			t.Errorf("Buffer[0] = 0x%02X, want 0x55", got)
+		}
+
 		// Verify GetPixel returns correct values
 		for i := 0; i < 8; i++ {
 			want := Color(i % 2)
