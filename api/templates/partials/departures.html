@@ -6,8 +6,8 @@
     <li class="dep-row{{if .Cancelled}} dep-cancelled{{else if lt .Minutes 5}} dep-soon{{end}}">
         <span class="dep-line">{{.Line}}</span>
         <span class="dep-dir">{{.Direction}}</span>
+        <span class="dep-eta">{{if .Cancelled}}cancelled{{else}}{{.Time}}{{end}}</span>
         <span class="dep-delay">{{if and (gt .Delay 0) (not .Cancelled)}}+{{.Delay}}{{end}}</span>
-        <span class="dep-eta">{{if .Cancelled}}cancelled{{else}}{{.MinutesStr}}{{end}}</span>
     </li>
     {{end}}
 </ul>
