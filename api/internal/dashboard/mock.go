@@ -3,6 +3,8 @@ package dashboard
 import (
 	"fmt"
 	"time"
+
+	"github.com/thiemok/tiny-dash/api/internal/homeassistant"
 )
 
 // mockWeather returns a weather view that exercises every condition icon
@@ -91,8 +93,8 @@ func mockCalendar(now time.Time, colors []calendarColor) *calendarView {
 
 // mockDepartures returns many upcoming departures across multiple lines,
 // including a delayed and a cancelled entry.
-func mockDepartures(now time.Time) *departuresView {
-	view := &departuresView{}
+func mockDepartures(now time.Time) []homeassistant.Departure {
+	var deps []homeassistant.Departure
 	rows := []struct {
 		line      string
 		direction string
@@ -119,15 +121,13 @@ func mockDepartures(now time.Time) *departuresView {
 	}
 	for _, r := range rows {
 		estimated := now.Add(time.Duration(r.afterMin) * time.Minute)
-		row := departureRow{
+		deps = append(deps, homeassistant.Departure{
 			Line:      r.line,
 			Direction: r.direction,
-			Minutes:   r.afterMin,
-			Time:      estimated.Add(-time.Duration(r.delay) * time.Minute).Format("15:04"),
-			Delay:     r.delay,
+			Planned:   estimated.Add(-time.Duration(r.delay) * time.Minute),
+			Estimated: estimated,
 			Cancelled: r.cancelled,
-		}
-		view.Departures = append(view.Departures, row)
+		})
 	}
-	return view
+	return deps
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,6 +16,7 @@ type Config struct {
 	Weather    WeatherConfig       `yaml:"weather"`
 	Calendar   CalendarConfig      `yaml:"calendar"`
 	Departures DeparturesConfig    `yaml:"departures"`
+	Refresh    RefreshConfig       `yaml:"refresh"`
 }
 
 type HomeAssistantConfig struct {
@@ -33,6 +35,41 @@ type CalendarConfig struct {
 type DeparturesConfig struct {
 	EntityIDs []string `yaml:"entityIds"`
 }
+
+// RefreshConfig bounds the delay the image response asks the device to wait
+// before its next fetch. Within the bounds, the delay runs until the next
+// moment a dashboard section changes.
+type RefreshConfig struct {
+	// Min and Max bound the delay outside quiet hours.
+	Min time.Duration `yaml:"min"`
+	Max time.Duration `yaml:"max"`
+	// Retry is the delay after a section failed to load.
+	Retry      time.Duration    `yaml:"retry"`
+	QuietHours QuietHoursConfig `yaml:"quietHours"`
+}
+
+// QuietHoursConfig is a daily window, in the server's local time zone, with
+// its own delay bounds and an hourly clock. Start and End are "15:04"; a
+// window may cross midnight. Leaving Start or End empty disables it.
+type QuietHoursConfig struct {
+	Start string        `yaml:"start"`
+	End   string        `yaml:"end"`
+	Min   time.Duration `yaml:"min"`
+	Max   time.Duration `yaml:"max"`
+}
+
+// Enabled reports whether a quiet hours window is configured.
+func (q QuietHoursConfig) Enabled() bool { return q.Start != "" && q.End != "" }
+
+// Defaults for unset RefreshConfig fields. The device clamps the delay to
+// its own bounds as well.
+const (
+	defaultRefreshMin   = 2 * time.Minute
+	defaultRefreshMax   = time.Hour
+	defaultRefreshRetry = 2 * time.Minute
+	defaultQuietMin     = time.Hour
+	defaultQuietMax     = 4 * time.Hour
+)
 
 const envPrefix = "TINYDASH_"
 
@@ -59,7 +96,41 @@ func Load() (*Config, error) {
 
 	applyEnvOverrides(cfg)
 
+	if err := cfg.Refresh.applyDefaults(); err != nil {
+		return nil, fmt.Errorf("config refresh: %w", err)
+	}
+
 	return cfg, nil
+}
+
+func (r *RefreshConfig) applyDefaults() error {
+	setDefault(&r.Min, defaultRefreshMin)
+	setDefault(&r.Max, defaultRefreshMax)
+	setDefault(&r.Retry, defaultRefreshRetry)
+	setDefault(&r.QuietHours.Min, defaultQuietMin)
+	setDefault(&r.QuietHours.Max, defaultQuietMax)
+	if r.Min > r.Max {
+		return fmt.Errorf("min %v exceeds max %v", r.Min, r.Max)
+	}
+	q := r.QuietHours
+	if q.Start == "" && q.End == "" {
+		return nil
+	}
+	if q.Min > q.Max {
+		return fmt.Errorf("quietHours: min %v exceeds max %v", q.Min, q.Max)
+	}
+	for _, v := range []string{q.Start, q.End} {
+		if _, err := time.Parse("15:04", v); err != nil {
+			return fmt.Errorf("quietHours: start and end must both be HH:MM, got %q", v)
+		}
+	}
+	return nil
+}
+
+func setDefault(d *time.Duration, def time.Duration) {
+	if *d <= 0 {
+		*d = def
+	}
 }
 
 // applyEnvOverrides walks the config struct and overrides any field that has

@@ -69,10 +69,18 @@ func (r *Renderer) Close(ctx context.Context) {
 	r.allocCancel()
 }
 
+// metaPrefix marks the meta tags whose content CaptureURL returns: values the
+// page computed while rendering, for the response that carries the image.
+const metaPrefix = "tinydash-"
+
+// readMetaJS returns the page's metaPrefix meta tags as a name → content map.
+const readMetaJS = `Object.fromEntries(Array.from(document.querySelectorAll('meta[name^="` + metaPrefix + `"]'), m => [m.name, m.content]))`
+
 // CaptureURL navigates to the given URL, waits for the page to settle,
-// and returns a screenshot as an image.Image. The trace context from ctx is
-// sent with every request Chrome makes, so the page load joins the caller's trace.
-func (r *Renderer) CaptureURL(ctx context.Context, url string, width, height int, settleTime time.Duration) (image.Image, error) {
+// and returns a screenshot as an image.Image along with the page's
+// "tinydash-*" meta tags by name. The trace context from ctx is sent with
+// every request Chrome makes, so the page load joins the caller's trace.
+func (r *Renderer) CaptureURL(ctx context.Context, url string, width, height int, settleTime time.Duration) (image.Image, map[string]string, error) {
 	ctx, span := tracer.Start(ctx, "render.CaptureURL", trace.WithAttributes(
 		attribute.Int("tinydash.render.width", width),
 		attribute.Int("tinydash.render.height", height),
@@ -90,6 +98,7 @@ func (r *Renderer) CaptureURL(ctx context.Context, url string, width, height int
 	}
 
 	var screenshotBuf []byte
+	var meta map[string]string
 	err := chromedp.Run(tabCtx,
 		network.Enable(),
 		network.SetExtraHTTPHeaders(headers),
@@ -97,15 +106,16 @@ func (r *Renderer) CaptureURL(ctx context.Context, url string, width, height int
 		chromedp.Navigate(url),
 		chromedp.Sleep(settleTime),
 		chromedp.FullScreenshot(&screenshotBuf, 100),
+		chromedp.Evaluate(readMetaJS, &meta),
 	)
 	if err != nil {
-		return nil, telemetry.RecordError(span, fmt.Errorf("capturing screenshot: %w", err))
+		return nil, nil, telemetry.RecordError(span, fmt.Errorf("capturing screenshot: %w", err))
 	}
 
 	img, err := png.Decode(bytes.NewReader(screenshotBuf))
 	if err != nil {
-		return nil, telemetry.RecordError(span, fmt.Errorf("decoding screenshot: %w", err))
+		return nil, nil, telemetry.RecordError(span, fmt.Errorf("decoding screenshot: %w", err))
 	}
 
-	return img, nil
+	return img, meta, nil
 }

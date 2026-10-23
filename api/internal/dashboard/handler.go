@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
@@ -82,7 +83,7 @@ type calendarView struct {
 type departureRow struct {
 	Line      string
 	Direction string
-	Minutes   int    // minutes until departure
+	Soon      bool   // departs within departureSoon
 	Time      string // planned departure, "15:04"; Delay is shown next to it
 	Delay     int    // minutes late (0 = on time)
 	Cancelled bool
@@ -147,14 +148,16 @@ type templateData struct {
 	Weather      *weatherView
 	Calendar     *calendarView
 	Departures   *departuresView
+	NextRefresh  string // RFC 3339, see nextRefreshMeta
 }
 
 // hourCells builds the 24-hour day-curve strip for the given time. Minute is
-// quantized to 5 minutes, matching the e-ink refresh cadence so a stale frame
-// never shows a misleading sub-block.
-func hourCells(now time.Time) []hourCell {
+// quantized to step, which the clock reports as its next change, so a stale
+// frame never shows a misleading sub-block.
+func hourCells(now time.Time, step time.Duration) []hourCell {
 	hour := now.Hour()
-	fill := (now.Minute() / 5) * 100 / 12
+	s := int(step / time.Minute)
+	fill := (now.Minute() / s) * s * 100 / 60
 	cells := make([]hourCell, 24)
 	for i := range cells {
 		bump := 0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/24)
@@ -171,8 +174,19 @@ func hourCells(now time.Time) []hourCell {
 	return cells
 }
 
+// clockStepAt is the clock strip's step at now.
+func (h *DashboardHandler) clockStepAt(now time.Time) time.Duration {
+	if quiet, _ := quietHours(now, h.config.Refresh.QuietHours); quiet {
+		return quietClockStep
+	}
+	return clockStep
+}
+
 func (h *DashboardHandler) newTemplateData(ctx context.Context, width, height int, palette render.Palette, mock bool) templateData {
 	now := time.Now()
+	step := h.clockStepAt(now)
+	cs := changes{}
+	cs.add(now, nextClockStep(now, step), sourceClock)
 
 	swatches := make([]template.CSS, len(palette))
 	for i, e := range palette {
@@ -183,7 +197,7 @@ func (h *DashboardHandler) newTemplateData(ctx context.Context, width, height in
 		Width:    width,
 		Height:   height,
 		Time:     now.Format("15:04"),
-		Cells:    hourCells(now),
+		Cells:    hourCells(now, step),
 		Weekday:  strings.ToUpper(now.Format("Monday")),
 		Day:      now.Format("2 Jan"),
 		Swatches: swatches,
@@ -192,14 +206,32 @@ func (h *DashboardHandler) newTemplateData(ctx context.Context, width, height in
 	if mock {
 		data.Weather = mockWeather(now)
 		data.Calendar = mockCalendar(now, calendarColors(palette))
-		data.Departures = mockDepartures(now)
+		data.Departures = departureRows(mockDepartures(now), now, &cs)
 	} else {
-		data.Weather = h.fetchWeather(ctx)
-		data.Calendar = h.fetchCalendar(ctx, now, calendarColors(palette))
-		data.Departures = h.fetchDepartures(ctx, now)
+		data.Weather = h.fetchWeather(ctx, now, &cs)
+		data.Calendar = h.fetchCalendar(ctx, now, calendarColors(palette), &cs)
+		data.Departures = h.fetchDepartures(ctx, now, &cs)
 	}
 
+	data.NextRefresh = h.decideRefresh(ctx, now, cs).Format(time.RFC3339)
 	return data
+}
+
+// decideRefresh picks the next refresh from the sections' changes and
+// records the decision on the request's span and the delay metric.
+func (h *DashboardHandler) decideRefresh(ctx context.Context, now time.Time, cs changes) time.Time {
+	d := decideRefresh(now, h.config.Refresh, cs)
+	delay := d.At.Sub(now)
+	attrs := []attribute.KeyValue{attrRefreshSource.String(d.Source), attrRefreshQuiet.Bool(d.Quiet)}
+	trace.SpanFromContext(ctx).SetAttributes(append(attrs, attrRefreshDelay.Int64(int64(delay/time.Second)))...)
+	refreshDelay.Record(ctx, delay.Seconds(), metric.WithAttributes(attrs...))
+	slog.InfoContext(ctx, "next refresh decided", "delay", delay, "source", d.Source, "quiet", d.Quiet)
+	return d.At
+}
+
+// sectionFailed schedules a retry for a section that failed to load.
+func (h *DashboardHandler) sectionFailed(now time.Time, cs *changes, source string) {
+	cs.add(now, now.Add(h.config.Refresh.Retry), source)
 }
 
 // departureTime formats the planned departure in now's zone. A clock time,
@@ -225,7 +257,7 @@ func fetchFailed(ctx context.Context, span trace.Span, source string, err error)
 	slog.WarnContext(ctx, "dashboard data source fetch failed", "datasource", source, "error", err)
 }
 
-func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time) *departuresView {
+func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time, cs *changes) *departuresView {
 	ids := h.config.Departures.EntityIDs
 	if len(ids) == 0 {
 		return nil
@@ -237,23 +269,35 @@ func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time) *
 	departures, err := h.haClient.GetUpcomingDepartures(ctx, ids, 0)
 	if err != nil {
 		fetchFailed(ctx, span, "departures", err)
+		h.sectionFailed(now, cs, sourceDepartures)
 		return nil
 	}
+	return departureRows(departures, now, cs)
+}
 
+// departureRows builds the departures view. A row changes when it turns
+// red departureSoon before leaving, and when it leaves and drops off the
+// list.
+func departureRows(departures []homeassistant.Departure, now time.Time, cs *changes) *departuresView {
 	view := &departuresView{}
 	for _, d := range departures {
+		leaves := d.Estimated
+		if leaves.IsZero() {
+			leaves = d.Planned
+		}
 		row := departureRow{
 			Line:      d.Line,
 			Direction: d.Direction,
-			Minutes:   d.MinutesUntil(now),
+			Soon:      leaves.Sub(now) < departureSoon,
 			Time:      departureTime(d, now),
 			Delay:     d.DelayMinutes(),
 			Cancelled: d.Cancelled,
 			Alerts:    d.Alerts,
 		}
 		view.Departures = append(view.Departures, row)
+		cs.add(now, leaves.Add(-departureSoon), sourceDepartures)
+		cs.add(now, leaves, sourceDepartures)
 	}
-
 	return view
 }
 
@@ -306,7 +350,7 @@ func shortCalendarLabel(entityID string) string {
 	return strings.ToUpper(name[:1]) + name[1:]
 }
 
-func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time, colors []calendarColor) *calendarView {
+func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time, colors []calendarColor, cs *changes) *calendarView {
 	ids := h.config.Calendar.EntityIDs
 	if len(ids) == 0 {
 		return nil
@@ -318,6 +362,7 @@ func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time, col
 	events, err := h.haClient.GetCalendarEventsForToday(ctx, ids)
 	if err != nil {
 		fetchFailed(ctx, span, "calendar", err)
+		h.sectionFailed(now, cs, sourceCalendar)
 		return nil
 	}
 
@@ -348,6 +393,9 @@ func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time, col
 		entry.TimeStr = ev.Start.Format("15:04")
 		entry.Ongoing = !ev.Start.After(now) && ev.End.After(now)
 		view.Timed = append(view.Timed, entry)
+		// It turns ongoing at its start and drops off at its end.
+		cs.add(now, ev.Start, sourceCalendar)
+		cs.add(now, ev.End, sourceCalendar)
 	}
 
 	if len(view.AllDay) == 0 && len(view.Timed) == 0 {
@@ -356,7 +404,7 @@ func (h *DashboardHandler) fetchCalendar(ctx context.Context, now time.Time, col
 	return view
 }
 
-func (h *DashboardHandler) fetchWeather(ctx context.Context) *weatherView {
+func (h *DashboardHandler) fetchWeather(ctx context.Context, now time.Time, cs *changes) *weatherView {
 	entityID := h.config.Weather.EntityID
 	if entityID == "" {
 		return nil
@@ -368,8 +416,14 @@ func (h *DashboardHandler) fetchWeather(ctx context.Context) *weatherView {
 	wd, err := h.haClient.GetWeather(ctx, entityID)
 	if err != nil {
 		fetchFailed(ctx, span, "weather", err)
+		h.sectionFailed(now, cs, sourceWeather)
 		return nil
 	}
+	// The hourly slots move on every hour; sunrise and sunset move on to the
+	// next day once they have passed.
+	cs.add(now, nextClockStep(now, time.Hour), sourceWeather)
+	cs.add(now, wd.Sunrise, sourceWeather)
+	cs.add(now, wd.Sunset, sourceWeather)
 
 	icon := conditionClass[wd.Condition]
 	if icon == "" {
@@ -458,7 +512,8 @@ func (h *DashboardHandler) handleDashboard(w http.ResponseWriter, r *http.Reques
 func (h *DashboardHandler) handleClock(w http.ResponseWriter, r *http.Request) {
 	// The clock partial refreshes every 10s; only the strip is needed, so skip
 	// the Home Assistant fetches that newTemplateData would otherwise perform.
-	data := templateData{Cells: hourCells(time.Now())}
+	now := time.Now()
+	data := templateData{Cells: hourCells(now, h.clockStepAt(now))}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "clock", data); err != nil {
 		telemetry.RecordError(trace.SpanFromContext(r.Context()), err)

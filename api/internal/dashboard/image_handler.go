@@ -102,7 +102,7 @@ func (h *ImageHandler) dashboardURL(width, height int, colors string, extra ...s
 // palette, recording the render duration for the given output format. It only
 // dithers when the palette lacks colors the template uses; otherwise it maps
 // each pixel to its nearest palette color.
-func (h *ImageHandler) renderImage(ctx context.Context, r *http.Request, output string, width, height int, palette render.Palette) (*image.RGBA, error) {
+func (h *ImageHandler) renderImage(ctx context.Context, r *http.Request, output string, width, height int, palette render.Palette) (*image.RGBA, map[string]string, error) {
 	start := time.Now()
 	dither := !palette.Covers(designColors)
 	attrs := []attribute.KeyValue{attrRenderOutput.String(output), attrRenderDither.Bool(dither)}
@@ -111,21 +111,34 @@ func (h *ImageHandler) renderImage(ctx context.Context, r *http.Request, output 
 	}()
 
 	url := h.dashboardURL(width, height, r.URL.Query().Get("colors"), "mock", r.URL.Query().Get("mock"))
-	screenshot, err := h.renderer.CaptureURL(ctx, url, width, height, h.settleTime)
+	screenshot, meta, err := h.renderer.CaptureURL(ctx, url, width, height, h.settleTime)
 	if err != nil {
 		attrs = append(attrs, semconv.ErrorTypeKey.String("capture"))
-		return nil, err
+		return nil, nil, err
 	}
 
 	paletteSize := trace.WithAttributes(attribute.Int("tinydash.render.palette_size", len(palette)))
 	if !dither {
 		_, span := tracer.Start(ctx, "render.Quantize", paletteSize)
 		defer span.End()
-		return render.Quantize(screenshot, palette), nil
+		return render.Quantize(screenshot, palette), meta, nil
 	}
 	_, span := tracer.Start(ctx, "render.Dither", paletteSize)
 	defer span.End()
-	return render.Dither(screenshot, palette), nil
+	return render.Dither(screenshot, palette), meta, nil
+}
+
+// setRefreshHint sets X-Refresh-After to the whole seconds, rounded up, until
+// the page's next refresh time. Without a usable time it sets nothing and the
+// device falls back to its own interval.
+func setRefreshHint(ctx context.Context, w http.ResponseWriter, meta map[string]string, now time.Time) {
+	at, err := time.Parse(time.RFC3339, meta[nextRefreshMeta])
+	if err != nil {
+		slog.WarnContext(ctx, "dashboard page has no usable next refresh time", "error", err)
+		return
+	}
+	secs := max(int64((at.Sub(now)+time.Second-1)/time.Second), 0)
+	w.Header().Set(refreshHintHeader, strconv.FormatInt(secs, 10))
 }
 
 func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +155,7 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	img, err := h.renderImage(ctx, r, "packed", width, height, palette)
+	img, meta, err := h.renderImage(ctx, r, "packed", width, height, palette)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
 		slog.ErrorContext(ctx, "dashboard render failed", "error", err)
@@ -153,6 +166,7 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 	packed := render.PackImage(img, width, height, colorDepth, palette)
 	span.End()
 
+	setRefreshHint(ctx, w, meta, time.Now())
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(packed)))
 	w.Write(packed)
@@ -169,13 +183,14 @@ func (h *ImageHandler) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	img, err := h.renderImage(ctx, r, "png", width, height, palette)
+	img, meta, err := h.renderImage(ctx, r, "png", width, height, palette)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
 		slog.ErrorContext(ctx, "dashboard render failed", "error", err)
 		return
 	}
 
+	setRefreshHint(ctx, w, meta, time.Now())
 	w.Header().Set("Content-Type", "image/png")
 	if err := png.Encode(w, img); err != nil {
 		telemetry.RecordError(trace.SpanFromContext(ctx), err)

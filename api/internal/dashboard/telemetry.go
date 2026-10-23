@@ -20,6 +20,13 @@ var (
 	attrRenderOutput = attribute.Key("tinydash.render.output")
 	// attrRenderDither is whether a render was dithered (true) or snapped to the nearest palette colors (false).
 	attrRenderDither = attribute.Key("tinydash.render.dither")
+	// attrRefreshSource is what set the next refresh: a section (clock, calendar, departures,
+	// weather), the end of quiet hours (quiet_end), or a bound (min, max).
+	attrRefreshSource = attribute.Key("tinydash.refresh.source")
+	// attrRefreshQuiet is whether the refresh was decided during quiet hours.
+	attrRefreshQuiet = attribute.Key("tinydash.refresh.quiet")
+	// attrRefreshDelay is the decided delay until the next refresh, in seconds (span only).
+	attrRefreshDelay = attribute.Key("tinydash.refresh.delay_s")
 )
 
 var (
@@ -29,6 +36,10 @@ var (
 	))
 	renderDuration = instrument(meter.Float64Histogram("tinydash.render.duration",
 		metric.WithDescription("Time to produce a dashboard image: Chrome capture, palette reduction and encoding."),
+		metric.WithUnit("s"),
+	))
+	refreshDelay = instrument(meter.Float64Histogram("tinydash.refresh.delay",
+		metric.WithDescription("Delay until the next device refresh, decided per dashboard render."),
 		metric.WithUnit("s"),
 	))
 )

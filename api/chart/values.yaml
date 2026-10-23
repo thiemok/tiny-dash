@@ -33,6 +33,14 @@ config:
   calendarEntityIds: []
   # Home Assistant departure-board sensor entity IDs to show.
   departureEntityIds: []
+  # Bounds for the delay the device is told to wait before its next fetch, and an optional
+  # nightly quiet-hours window (server local time). Rendered verbatim as `refresh:` in
+  # config.yaml; unset fields use the API's defaults. Example:
+  #   refresh:
+  #     min: 2m
+  #     max: 1h
+  #     quietHours: { start: "23:00", end: "06:30", min: 1h, max: 4h }
+  refresh: {}
   # Extra TINYDASH_* env vars as key/value (keys are used verbatim, e.g. TINYDASH_HA_BASE_URL).
   # These are set as container env vars and override the corresponding config.yaml values.
   extraEnv: {}
