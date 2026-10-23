@@ -5,23 +5,39 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>tiny-dash</title>
         <style>
+            /* Panel colours. Every colour on the page is one of these six exact
+               values, so the screenshot maps 1:1 onto the e-ink palette and the
+               image endpoints can skip dithering (see designColors in
+               internal/dashboard). No greys or in-between shades: they speckle
+               when dithered and vanish or darken when snapped. */
+            :root {
+              --ink: #000000;
+              --paper: #ffffff;
+              --red: #ff0000;
+              --blue: #0000ff;
+              --green: #00ff00;
+              --yellow: #ffff00;
+              --radius: 12px;
+            }
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-              font-family: 'Courier New', monospace;
-              background: #fff;
-              color: #000;
+              /* A heavy-stemmed sans at 16px+ survives the 800x480 panel; the
+                 old Courier New fell back to the thin Liberation Mono. */
+              font-family: 'Liberation Sans', 'Noto Sans', Arial, sans-serif;
+              background: var(--paper);
+              color: var(--ink);
               width: {{.Width}}px;
               height: {{.Height}}px;
               overflow: hidden;
-              padding: 12px 16px;
+              padding: 10px 14px;
               display: flex;
               flex-direction: column;
-              gap: 10px;
+              gap: 8px;
             }
             .header {
               display: flex;
               justify-content: space-between;
-              align-items: center;
+              align-items: flex-end;
             }
             .clock {
               display: flex;
@@ -31,8 +47,7 @@
                24 hours as a noon-peak silhouette. Elapsed hours are solid, the
                current hour carries a caret + a bottom-up minute fill, future
                hours are outlined. 6-hour quarter gaps act as landmarks so the
-               hour reads at a glance. Solid black only — no grays, which
-               speckle when dithered to the e-ink palette. */
+               hour reads at a glance. */
             .clock-strip {
               display: flex;
               align-items: flex-end;
@@ -41,12 +56,12 @@
             }
             .clock-cell {
               width: 9px;
-              border: 2px solid #000;
-              background: #fff;
+              border: 2px solid var(--ink);
+              background: var(--paper);
               position: relative;
             }
             .clock-cell.past {
-              background: #000;
+              background: var(--ink);
             }
             .clock-cell.qstart {
               margin-left: 12px;
@@ -58,7 +73,7 @@
               left: 0;
               bottom: 0;
               width: 100%;
-              background: #c00;
+              background: var(--red);
             }
             .clock-caret {
               position: absolute;
@@ -69,17 +84,25 @@
               height: 0;
               border-left: 6px solid transparent;
               border-right: 6px solid transparent;
-              border-top: 8px solid #c00;
+              border-top: 8px solid var(--red);
             }
             .date {
-              font-size: 22px;
               text-align: right;
+              font-weight: bold;
+              line-height: 1;
+            }
+            .date-weekday {
+              font-size: 18px;
+              letter-spacing: 1px;
+            }
+            .date-day {
+              font-size: 34px;
             }
             .content {
               flex: 1;
               display: grid;
               grid-template-columns: 1fr 1fr;
-              gap: 10px;
+              gap: 12px;
               min-height: 0;
             }
             .content-col {
@@ -88,85 +111,116 @@
               gap: 10px;
               min-height: 0;
             }
+            .card {
+              border: 3px solid var(--ink);
+              border-radius: var(--radius);
+              padding: 6px 10px;
+              min-height: 0;
+              overflow: hidden;
+            }
+            .card-title {
+              font-size: 15px;
+              font-weight: bold;
+              text-transform: uppercase;
+              letter-spacing: 1px;
+              border-bottom: 2px solid var(--ink);
+              padding-bottom: 2px;
+              margin-bottom: 4px;
+            }
+            .card-empty {
+              font-size: 18px;
+            }
+            /* Lists clip at whole rows: a column-wrapping flex box pushes rows
+               that don't fit into a second column, which overflow hides. This
+               avoids half-cut rows without a fade (gradients would dither). */
+            .clip-list {
+              flex: 1;
+              min-height: 0;
+              list-style: none;
+              display: flex;
+              flex-flow: column wrap;
+              align-content: flex-start;
+              overflow: hidden;
+              column-gap: 40px;
+            }
+            .clip-list > li {
+              width: 100%;
+              flex-shrink: 0;
+            }
+
             /* --- Weather icons (Material Design Icons, mask-tinted) --- */
-            /* Vendored SVGs in static/icons/ are tinted via mask-image so each
-               condition can use a saturated, palette-aligned color. Mid-grays are
-               avoided on purpose: they speckle badly when Floyd-Steinberg dithered
-               to the e-ink palette, so neutral icons are rendered pure black. */
+            /* Vendored SVGs in static/icons/ are tinted via mask-image with a
+               panel colour; yellow is too faint on white, so sun and lightning
+               use red and neutral conditions use ink. */
             .wi {
               display: inline-block;
               -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
               -webkit-mask-position: center; mask-position: center;
               -webkit-mask-size: contain; mask-size: contain;
             }
-            .wi-lg { width: 36px; height: 36px; }
-            .wi-sm { width: 22px; height: 22px; }
+            .wi-lg { width: 46px; height: 46px; }
+            .wi-sm { width: 26px; height: 26px; }
 
-            .wi-sunny        { -webkit-mask-image: url(/static/icons/weather-sunny.svg);         mask-image: url(/static/icons/weather-sunny.svg);         background-color: #e08000; }
-            .wi-night        { -webkit-mask-image: url(/static/icons/weather-night.svg);         mask-image: url(/static/icons/weather-night.svg);         background-color: #000000; }
-            .wi-partlycloudy { -webkit-mask-image: url(/static/icons/weather-partly-cloudy.svg); mask-image: url(/static/icons/weather-partly-cloudy.svg); background-color: #000000; }
-            .wi-cloudy       { -webkit-mask-image: url(/static/icons/weather-cloudy.svg);        mask-image: url(/static/icons/weather-cloudy.svg);        background-color: #000000; }
-            .wi-rainy        { -webkit-mask-image: url(/static/icons/weather-rainy.svg);         mask-image: url(/static/icons/weather-rainy.svg);         background-color: #0044cc; }
-            .wi-pouring      { -webkit-mask-image: url(/static/icons/weather-pouring.svg);       mask-image: url(/static/icons/weather-pouring.svg);       background-color: #0044cc; }
-            .wi-snowy        { -webkit-mask-image: url(/static/icons/weather-snowy.svg);         mask-image: url(/static/icons/weather-snowy.svg);         background-color: #000000; }
-            .wi-fog          { -webkit-mask-image: url(/static/icons/weather-fog.svg);           mask-image: url(/static/icons/weather-fog.svg);           background-color: #000000; }
-            .wi-lightning    { -webkit-mask-image: url(/static/icons/weather-lightning.svg);     mask-image: url(/static/icons/weather-lightning.svg);     background-color: #e08000; }
-            .wi-windy        { -webkit-mask-image: url(/static/icons/weather-windy.svg);         mask-image: url(/static/icons/weather-windy.svg);         background-color: #000000; }
+            .wi-sunny        { -webkit-mask-image: url(/static/icons/weather-sunny.svg);         mask-image: url(/static/icons/weather-sunny.svg);         background-color: var(--red); }
+            .wi-night        { -webkit-mask-image: url(/static/icons/weather-night.svg);         mask-image: url(/static/icons/weather-night.svg);         background-color: var(--ink); }
+            .wi-partlycloudy { -webkit-mask-image: url(/static/icons/weather-partly-cloudy.svg); mask-image: url(/static/icons/weather-partly-cloudy.svg); background-color: var(--ink); }
+            .wi-cloudy       { -webkit-mask-image: url(/static/icons/weather-cloudy.svg);        mask-image: url(/static/icons/weather-cloudy.svg);        background-color: var(--ink); }
+            .wi-rainy        { -webkit-mask-image: url(/static/icons/weather-rainy.svg);         mask-image: url(/static/icons/weather-rainy.svg);         background-color: var(--blue); }
+            .wi-pouring      { -webkit-mask-image: url(/static/icons/weather-pouring.svg);       mask-image: url(/static/icons/weather-pouring.svg);       background-color: var(--blue); }
+            .wi-snowy        { -webkit-mask-image: url(/static/icons/weather-snowy.svg);         mask-image: url(/static/icons/weather-snowy.svg);         background-color: var(--ink); }
+            .wi-fog          { -webkit-mask-image: url(/static/icons/weather-fog.svg);           mask-image: url(/static/icons/weather-fog.svg);           background-color: var(--ink); }
+            .wi-lightning    { -webkit-mask-image: url(/static/icons/weather-lightning.svg);     mask-image: url(/static/icons/weather-lightning.svg);     background-color: var(--red); }
+            .wi-windy        { -webkit-mask-image: url(/static/icons/weather-windy.svg);         mask-image: url(/static/icons/weather-windy.svg);         background-color: var(--ink); }
 
             /* Inline arrow/sun indicators for meta row */
-            .arrow-up, .arrow-down { display: inline-block; width: 0; height: 0; margin: 0 2px; vertical-align: middle; }
+            .arrow-up, .arrow-down { display: inline-block; width: 0; height: 0; margin: 0 3px 0 0; vertical-align: middle; }
             .arrow-up {
-              border-left: 5px solid transparent; border-right: 5px solid transparent;
-              border-bottom: 7px solid #c00;
+              border-left: 6px solid transparent; border-right: 6px solid transparent;
+              border-bottom: 9px solid var(--red);
             }
             .arrow-down {
-              border-left: 5px solid transparent; border-right: 5px solid transparent;
-              border-top: 7px solid #0044cc;
+              border-left: 6px solid transparent; border-right: 6px solid transparent;
+              border-top: 9px solid var(--blue);
             }
             .sun-rise, .sun-set {
               display: inline-flex; align-items: center; gap: 2px;
-              margin: 0 4px 0 0; vertical-align: middle;
+              margin: 0 3px 0 0; vertical-align: middle;
             }
             .sun-rise::before, .sun-set::before {
               content: ''; display: inline-block;
               width: 12px; height: 12px; border-radius: 50%;
-              background: #e08000;
+              background: var(--red);
             }
             .sun-rise::after {
               content: ''; display: inline-block; width: 0; height: 0;
               border-left: 5px solid transparent; border-right: 5px solid transparent;
-              border-bottom: 7px solid #e08000;
+              border-bottom: 7px solid var(--ink);
             }
-            .sun-set::before { background: #c04000; }
             .sun-set::after {
               content: ''; display: inline-block; width: 0; height: 0;
               border-left: 5px solid transparent; border-right: 5px solid transparent;
-              border-top: 7px solid #c04000;
+              border-top: 7px solid var(--ink);
             }
 
             /* --- Weather layout --- */
             .weather {
-              border: 2px solid #000;
-              border-radius: 8px;
-              padding: 8px 12px;
               display: flex;
               align-items: center;
-              gap: 12px;
+              gap: 10px;
             }
             .weather-now {
               display: flex;
               flex-direction: column;
               gap: 4px;
-              min-width: 120px;
             }
             .weather-current {
               display: flex;
               align-items: center;
-              gap: 10px;
+              gap: 6px;
             }
             .weather-temp {
               font-weight: bold;
-              font-size: 30px;
+              font-size: 44px;
               line-height: 1;
             }
             .weather-meta {
@@ -174,82 +228,61 @@
               grid-template-columns: auto auto;
               gap: 2px 10px;
               justify-content: start;
-              font-size: 14px;
+              font-size: 15px;
+              font-weight: bold;
             }
             .weather-forecast {
               display: flex;
               flex: 1;
               justify-content: space-around;
               align-items: center;
-              border-left: 2px solid #000;
-              padding-left: 10px;
+              border-left: 2px solid var(--ink);
+              padding-left: 8px;
             }
             .forecast-entry {
               display: flex;
               flex-direction: column;
               align-items: center;
               gap: 2px;
-              font-size: 13px;
-            }
-            .forecast-time {
+              font-size: 16px;
               font-weight: bold;
             }
+
             /* --- Calendar --- */
             .calendar {
               flex: 1;
-              border: 2px solid #000;
-              border-radius: 8px;
-              padding: 8px 12px;
               display: flex;
               flex-direction: column;
-              gap: 4px;
-              min-height: 0;
-              overflow: hidden;
             }
-            .cal-header {
-              font-size: 16px;
+            /* All-day events: full-width bars in their calendar's colour. */
+            .cal-allday {
+              font-size: 18px;
               font-weight: bold;
-              border-bottom: 1px solid #000;
-              padding-bottom: 2px;
-              margin-bottom: 2px;
-            }
-            .cal-empty {
-              font-size: 14px;
-              color: #555;
-              font-style: italic;
-            }
-            .cal-list {
-              list-style: none;
-              display: flex;
-              flex-direction: column;
-              gap: 2px;
-            }
-            .cal-list-wrap {
-              flex: 1;
-              min-height: 0;
+              padding: 2px 8px;
+              margin-bottom: 4px;
+              border-radius: 6px;
+              white-space: nowrap;
               overflow: hidden;
-              -webkit-mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
-                      mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
+              text-overflow: ellipsis;
             }
-            .cal-allday { margin-bottom: 2px; }
             .cal-event {
               display: flex;
-              align-items: baseline;
-              gap: 8px;
-              font-size: 13px;
-              line-height: 1.2;
+              align-items: center;
+              gap: 10px;
+              height: 29px;
+              padding: 0 6px;
+              font-size: 19px;
+              border-radius: 6px;
             }
-            .cal-dot {
-              flex: 0 0 10px;
-              width: 10px;
-              height: 10px;
-              border-radius: 50%;
-              align-self: center;
+            .cal-bar {
+              flex: 0 0 6px;
+              align-self: stretch;
+              margin: 4px 0;
+              border-radius: 3px;
             }
             .cal-time {
-              flex: 0 0 58px;
+              flex: 0 0 56px;
               font-weight: bold;
-              font-variant-numeric: tabular-nums;
               white-space: nowrap;
             }
             .cal-summary {
@@ -259,69 +292,42 @@
               white-space: nowrap;
             }
             .cal-location {
-              color: #555;
-              font-size: 12px;
+              font-size: 15px;
+            }
+            /* The running event is inverted so it reads as "now" from afar. */
+            .cal-ongoing {
+              background: var(--ink);
+              color: var(--paper);
+            }
+            .cal-ongoing .cal-bar {
+              background: var(--paper) !important;
             }
             .cal-ongoing .cal-summary {
               font-weight: bold;
-            }
-            .cal-ongoing .cal-time {
-              color: #c00;
             }
 
             /* --- Departures --- */
             .departures {
               flex: 1;
-              border: 2px solid #000;
-              border-radius: 8px;
-              padding: 8px 12px;
               display: flex;
               flex-direction: column;
-              gap: 4px;
-              min-height: 0;
-              overflow: hidden;
-            }
-            .dep-list-wrap {
-              flex: 1;
-              min-height: 0;
-              overflow: hidden;
-              -webkit-mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
-                      mask-image: linear-gradient(#000 calc(100% - 12px), transparent);
-            }
-            .dep-header {
-              font-size: 16px;
-              font-weight: bold;
-              border-bottom: 1px solid #000;
-              padding-bottom: 2px;
-              margin-bottom: 2px;
-            }
-            .dep-empty {
-              font-size: 14px;
-              color: #555;
-              font-style: italic;
-            }
-            .dep-list {
-              list-style: none;
-              display: flex;
-              flex-direction: column;
-              gap: 4px;
             }
             .dep-row {
               display: flex;
-              align-items: baseline;
+              align-items: center;
               gap: 8px;
-              font-size: 14px;
-              line-height: 1.2;
+              height: 29px;
+              font-size: 19px;
             }
             .dep-line {
-              flex: 0 0 38px;
+              flex: 0 0 46px;
               text-align: center;
               font-weight: bold;
-              background: #000;
-              color: #fff;
-              padding: 2px 3px;
-              border-radius: 3px;
-              font-size: 13px;
+              font-size: 17px;
+              background: var(--ink);
+              color: var(--paper);
+              padding: 1px 0;
+              border-radius: 5px;
             }
             .dep-dir {
               flex: 1;
@@ -329,28 +335,29 @@
               text-overflow: ellipsis;
               white-space: nowrap;
             }
-            .dep-time {
-              flex: 0 0 auto;
-              font-variant-numeric: tabular-nums;
-            }
             .dep-delay {
-              color: #c00;
+              color: var(--red);
               font-weight: bold;
+              font-size: 16px;
             }
             .dep-eta {
-              flex: 0 0 56px;
+              flex: 0 0 auto;
+              min-width: 64px;
               text-align: right;
               font-weight: bold;
-              color: #0044cc;
-              font-variant-numeric: tabular-nums;
+              font-size: 21px;
+              white-space: nowrap;
             }
-            .dep-cancelled .dep-dir,
-            .dep-cancelled .dep-time {
+            .dep-soon .dep-eta {
+              color: var(--red);
+            }
+            .dep-cancelled .dep-dir {
               text-decoration: line-through;
-              color: #888;
+              text-decoration-thickness: 2px;
             }
             .dep-cancelled .dep-eta {
-              color: #c00;
+              color: var(--red);
+              font-size: 16px;
             }
 
             .color-bar {
@@ -361,7 +368,7 @@
             }
             .color-bar .swatch {
               flex: 1;
-              border: 1px solid #000;
+              border: 1px solid var(--ink);
             }
         </style>
         <script src="/static/htmx.min.js"></script>
@@ -376,24 +383,27 @@
             >
                 {{template "clock" .}}
             </div>
-            <div class="date">{{.Date}}</div>
+            <div class="date">
+                <div class="date-weekday">{{.Weekday}}</div>
+                <div class="date-day">{{.Day}}</div>
+            </div>
         </div>
         <div class="content">
             <div class="content-col">
                 {{if .Weather}}
-                <div class="weather">
+                <div class="card weather">
                     {{template "weather" .}}
                 </div>
                 {{end}}
                 {{if .Departures}}
-                <div class="departures">
+                <div class="card departures">
                     {{template "departures" .}}
                 </div>
                 {{end}}
             </div>
             <div class="content-col">
                 {{if .Calendar}}
-                <div class="calendar">
+                <div class="card calendar">
                     {{template "calendar" .}}
                 </div>
                 {{end}}

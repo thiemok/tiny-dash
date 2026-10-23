@@ -37,6 +37,10 @@ RUN apt-get update \
         fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
+# Render text without antialiasing: grey glyph edges aren't panel colors.
+COPY fontconfig/fonts.conf /etc/tiny-dash/fonts.conf
+ENV FONTCONFIG_FILE=/etc/tiny-dash/fonts.conf
+
 # The renderer reads CHROME_PATH; point it at the bundled headless-shell binary.
 ENV CHROME_PATH=/headless-shell/headless-shell
 

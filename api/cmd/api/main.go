@@ -71,7 +71,7 @@ func main() {
 	slog.InfoContext(ctx, "Endpoints:")
 	slog.InfoContext(ctx, "  GET /dashboard                      — HTML dashboard")
 	slog.InfoContext(ctx, "  GET /api/dashboard/image             — packed e-ink image")
-	slog.InfoContext(ctx, "  GET /api/dashboard/preview           — dithered PNG preview")
+	slog.InfoContext(ctx, "  GET /api/dashboard/preview           — PNG preview of the panel image")
 	slog.InfoContext(ctx, "  GET "+healthPath+"                       — health check")
 
 	srv := &http.Server{Addr: port, Handler: newHandler(dashHandler, imageHandler)}

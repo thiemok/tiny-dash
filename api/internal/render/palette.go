@@ -53,3 +53,20 @@ func (p Palette) NearestColor(r, g, b uint8) PaletteEntry {
 	}
 	return best
 }
+
+// Covers reports whether every color index in want is part of the palette.
+func (p Palette) Covers(want []byte) bool {
+	for _, idx := range want {
+		found := false
+		for _, e := range p {
+			if e.Index == idx {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}

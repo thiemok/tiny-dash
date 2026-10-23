@@ -20,6 +20,12 @@ import (
 	"github.com/thiemok/tiny-dash/api/internal/telemetry"
 )
 
+// designColors are the panel colors the dashboard template paints with
+// (black, white, yellow, red, blue, green). When the requested palette covers
+// all of them, the screenshot is palette colors plus antialiasing edges, and
+// snapping each pixel to its nearest color is crisper than dithering.
+var designColors = []byte{0, 1, 2, 3, 5, 6}
+
 // ImageHandler serves the rendered e-ink image endpoints for picoDevice.
 type ImageHandler struct {
 	renderer   *render.Renderer
@@ -92,11 +98,14 @@ func (h *ImageHandler) dashboardURL(width, height int, colors string, extra ...s
 	return url
 }
 
-// renderDithered screenshots the dashboard in Chrome and dithers it to the
-// palette, recording the render duration for the given output format.
-func (h *ImageHandler) renderDithered(ctx context.Context, r *http.Request, output string, width, height int, palette render.Palette) (*image.RGBA, error) {
+// renderImage screenshots the dashboard in Chrome and reduces it to the
+// palette, recording the render duration for the given output format. It only
+// dithers when the palette lacks colors the template uses; otherwise it maps
+// each pixel to its nearest palette color.
+func (h *ImageHandler) renderImage(ctx context.Context, r *http.Request, output string, width, height int, palette render.Palette) (*image.RGBA, error) {
 	start := time.Now()
-	attrs := []attribute.KeyValue{attrRenderOutput.String(output)}
+	dither := !palette.Covers(designColors)
+	attrs := []attribute.KeyValue{attrRenderOutput.String(output), attrRenderDither.Bool(dither)}
 	defer func() {
 		renderDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 	}()
@@ -108,7 +117,13 @@ func (h *ImageHandler) renderDithered(ctx context.Context, r *http.Request, outp
 		return nil, err
 	}
 
-	_, span := tracer.Start(ctx, "render.Dither", trace.WithAttributes(attribute.Int("tinydash.render.palette_size", len(palette))))
+	paletteSize := trace.WithAttributes(attribute.Int("tinydash.render.palette_size", len(palette)))
+	if !dither {
+		_, span := tracer.Start(ctx, "render.Quantize", paletteSize)
+		defer span.End()
+		return render.Quantize(screenshot, palette), nil
+	}
+	_, span := tracer.Start(ctx, "render.Dither", paletteSize)
 	defer span.End()
 	return render.Dither(screenshot, palette), nil
 }
@@ -127,7 +142,7 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dithered, err := h.renderDithered(ctx, r, "packed", width, height, palette)
+	img, err := h.renderImage(ctx, r, "packed", width, height, palette)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
 		slog.ErrorContext(ctx, "dashboard render failed", "error", err)
@@ -135,7 +150,7 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, span := tracer.Start(ctx, "render.PackImage", trace.WithAttributes(attribute.Int("tinydash.render.color_depth", colorDepth)))
-	packed := render.PackImage(dithered, width, height, colorDepth, palette)
+	packed := render.PackImage(img, width, height, colorDepth, palette)
 	span.End()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -154,7 +169,7 @@ func (h *ImageHandler) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dithered, err := h.renderDithered(ctx, r, "png", width, height, palette)
+	img, err := h.renderImage(ctx, r, "png", width, height, palette)
 	if err != nil {
 		http.Error(w, "screenshot failed", http.StatusInternalServerError)
 		slog.ErrorContext(ctx, "dashboard render failed", "error", err)
@@ -162,7 +177,7 @@ func (h *ImageHandler) handlePreview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "image/png")
-	if err := png.Encode(w, dithered); err != nil {
+	if err := png.Encode(w, img); err != nil {
 		telemetry.RecordError(trace.SpanFromContext(ctx), err)
 		slog.ErrorContext(ctx, "png encode failed", "error", err)
 	}

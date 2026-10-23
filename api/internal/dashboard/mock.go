@@ -29,9 +29,9 @@ func mockWeather(now time.Time) *weatherView {
 
 	// Forecast: pack distinct conditions into each slot.
 	forecastConditions := []string{
-		"sunny", "partlycloudy", "rainy", "lightning", "snowy",
+		"sunny", "partlycloudy", "rainy", "lightning",
 	}
-	temps := []float64{12, 11, 9, 7, 4}
+	temps := []float64{12, 11, 9, 7}
 	startHour := now.Hour() + 1
 	for i, cond := range forecastConditions {
 		view.HourlyForecast = append(view.HourlyForecast, hourlyForecastView{
@@ -43,17 +43,18 @@ func mockWeather(now time.Time) *weatherView {
 	return view
 }
 
-// mockCalendar returns a calendar view with a mix of all-day and timed
-// events spanning the full day, including one currently ongoing.
-func mockCalendar(now time.Time) *calendarView {
-	colors := calendarPalette
+// mockCalendar returns a calendar view with all-day events and timed events
+// laid out around now: one already finished (filtered out like real ones),
+// one ongoing and the rest ahead, so every state shows at any hour.
+func mockCalendar(now time.Time, colors []calendarColor) *calendarView {
+	color := func(source int) calendarColor { return colors[source%len(colors)] }
 	view := &calendarView{
 		AllDay: []eventView{
-			{TimeStr: "All day", Summary: "Fronleichnam (regionaler Feiertag)", AllDay: true, Source: "Feiertage", Color: colors[2]},
-			{TimeStr: "All day", Summary: "Sarahs Geburtstag", AllDay: true, Source: "Birthdays", Color: colors[1]},
+			{TimeStr: "All day", Summary: "Fronleichnam (regionaler Feiertag)", AllDay: true, Source: "Feiertage", Color: color(2).Fill, Ink: color(2).Ink},
+			{TimeStr: "All day", Summary: "Sarahs Geburtstag", AllDay: true, Source: "Birthdays", Color: color(3).Fill, Ink: color(3).Ink},
 		},
 	}
-	start := time.Date(now.Year(), now.Month(), now.Day(), 8, 0, 0, 0, now.Location())
+	start := now.Truncate(time.Hour).Add(-time.Hour)
 	events := []struct {
 		offsetMin int
 		duration  time.Duration
@@ -61,24 +62,28 @@ func mockCalendar(now time.Time) *calendarView {
 		source    int
 	}{
 		{0, 60 * time.Minute, "Standup", 0},
-		{90, 30 * time.Minute, "1:1 with Marc", 0},
+		{60, 60 * time.Minute, "Sprint planning", 0},
+		{120, 30 * time.Minute, "1:1 with Marc", 0},
 		{180, 60 * time.Minute, "Design review", 0},
-		{240, 30 * time.Minute, "Coffee with Lisa", 3},
-		{360, 90 * time.Minute, "Lunch break", 3},
-		{480, 60 * time.Minute, "Sprint planning", 0},
-		{600, 60 * time.Minute, "Pickup kids from school", 3},
-		{720, 120 * time.Minute, "Cinema: new release", 3},
+		{240, 30 * time.Minute, "Coffee with Lisa", 1},
+		{300, 90 * time.Minute, "Lunch break", 3},
+		{420, 60 * time.Minute, "Pickup kids from school", 1},
+		{540, 120 * time.Minute, "Cinema: new release", 2},
 	}
 	for _, e := range events {
 		evStart := start.Add(time.Duration(e.offsetMin) * time.Minute)
 		evEnd := evStart.Add(e.duration)
+		if !evEnd.After(now) {
+			continue
+		}
 		view.Timed = append(view.Timed, eventView{
 			TimeStr: evStart.Format("15:04"),
 			Summary: e.summary,
 			AllDay:  false,
 			Ongoing: !evStart.After(now) && evEnd.After(now),
 			Source:  shortCalendarLabel("calendar.x"),
-			Color:   colors[e.source%len(colors)],
+			Color:   color(e.source).Fill,
+			Ink:     color(e.source).Ink,
 		})
 	}
 	return view
@@ -116,7 +121,6 @@ func mockDepartures(now time.Time) *departuresView {
 		row := departureRow{
 			Line:      r.line,
 			Direction: r.direction,
-			TimeStr:   now.Add(time.Duration(r.afterMin) * time.Minute).Format("15:04"),
 			Minutes:   r.afterMin,
 			Delay:     r.delay,
 			Cancelled: r.cancelled,
@@ -126,4 +130,3 @@ func mockDepartures(now time.Time) *departuresView {
 	}
 	return view
 }
-

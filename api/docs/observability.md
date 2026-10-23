@@ -25,7 +25,7 @@ GET /api/dashboard/image
 │  │  ├─ dashboard.fetch calendar → homeassistant.GetCalendarEventsForToday → …
 │  │  └─ dashboard.fetch departures → homeassistant.GetUpcomingDepartures → …
 │  └─ GET /static/
-├─ render.Dither
+├─ render.Quantize                   (render.Dither when the palette lacks template colors)
 └─ render.PackImage
 ```
 
@@ -112,7 +112,7 @@ block in `chart/values.yaml`.
 
   | Metric | Type | Attributes | Meaning |
   |---|---|---|---|
-  | `tinydash.render.duration` | histogram, `s` | `tinydash.render.output` (`packed`/`png`), `error.type` | Chrome capture + dither, per image request |
+  | `tinydash.render.duration` | histogram, `s` | `tinydash.render.output` (`packed`/`png`), `tinydash.render.dither`, `error.type` | Chrome capture + palette reduction, per image request |
   | `tinydash.datasource.failures` | counter, `{failure}` | `tinydash.datasource` | A dashboard section rendered empty because its fetch failed |
 
 ### Never put in telemetry

@@ -1,12 +1,22 @@
 # API
 
-HTTP server that renders an HTMX dashboard, captures it as a screenshot, dithers it to an e-ink color palette, and serves the result as packed pixel data for the picoDevice.
+HTTP server that renders an HTMX dashboard, captures it as a screenshot, reduces it to the e-ink color palette, and serves the result as packed pixel data for the picoDevice.
 
 ## Pipeline
 
 ```
-Go html/template + HTMX  ->  chromedp screenshot  ->  Floyd-Steinberg dither  ->  pixel packing  ->  HTTP response
+Go html/template + HTMX  ->  chromedp screenshot  ->  palette reduction  ->  pixel packing  ->  HTTP response
 ```
+
+Palette reduction depends on the requested `colors`. The template paints only with the six
+Spectra 6 colors (black, white, yellow, red, blue, green; enforced by
+`internal/dashboard/palette_test.go`). When the requested palette includes all of them, each pixel
+is snapped to its nearest palette color, which keeps text and edges crisp. With a smaller palette
+the screenshot is Floyd-Steinberg dithered instead, so colors the display lacks are approximated.
+
+Chrome renders text without antialiasing through the fontconfig override in
+[`fontconfig/fonts.conf`](fontconfig/fonts.conf), selected by `FONTCONFIG_FILE` in the Docker image
+and in the flatpak wrapper. Set the same variable when pointing `CHROME_PATH` at another binary.
 
 ## Running
 
@@ -26,7 +36,7 @@ CHROME_PATH=/usr/bin/chromium pnpm nx run api:serve
 |---|---|
 | `GET /dashboard` | Interactive HTML dashboard (with HTMX auto-refresh) |
 | `GET /api/dashboard/image` | Packed e-ink binary data (consumed by picoDevice) |
-| `GET /api/dashboard/preview` | Dithered PNG preview (for debugging) |
+| `GET /api/dashboard/preview` | PNG preview of exactly what the panel gets (for debugging) |
 | `GET /api/hello` | Health check |
 
 ### Query Parameters
