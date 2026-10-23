@@ -13,10 +13,11 @@ const rndTop = ^uint32(0)
 var (
 	t0     = time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 	policy = Policy{
-		Default: time.Minute,
-		Min:     2 * time.Minute,
-		Max:     4 * time.Hour,
-		Retry:   backoff.Exponential{Min: 30 * time.Second, Max: 10 * time.Minute},
+		Default:  time.Minute,
+		Min:      2 * time.Minute,
+		Max:      4 * time.Hour,
+		PressMin: 30 * time.Second,
+		Retry:    backoff.Exponential{Min: 30 * time.Second, Max: 10 * time.Minute},
 	}
 )
 
@@ -90,19 +91,29 @@ func TestPress(t *testing.T) {
 			t.Fatalf("Press = %v, Next = %v; want %v", due, s.Next(), now)
 		}
 	})
-	t.Run("right after the last fetch waits for min", func(t *testing.T) {
+	t.Run("right after the last fetch waits for press min", func(t *testing.T) {
 		s := New(policy)
 		s.Succeeded(t0, time.Hour, true)
-		want := t0.Add(policy.Min)
-		if due := s.Press(t0.Add(40 * time.Second)); !due.Equal(want) {
+		want := t0.Add(policy.PressMin)
+		if due := s.Press(t0.Add(10 * time.Second)); !due.Equal(want) {
 			t.Fatalf("Press = %v, want %v", due, want)
 		}
 	})
-	t.Run("never postpones an earlier fetch", func(t *testing.T) {
+	t.Run("is not held back by the hint's min", func(t *testing.T) {
 		s := New(policy)
-		s.Succeeded(t0, 0, false) // default 1 min, below Min
-		want := t0.Add(policy.Default)
-		if due := s.Press(t0.Add(10 * time.Second)); !due.Equal(want) {
+		s.Succeeded(t0, time.Hour, true)
+		now := t0.Add(40 * time.Second) // past PressMin, within Min
+		if due := s.Press(now); !due.Equal(now) {
+			t.Fatalf("Press = %v, want %v", due, now)
+		}
+	})
+	t.Run("never postpones an earlier fetch", func(t *testing.T) {
+		p := policy
+		p.Default = 10 * time.Second // below PressMin
+		s := New(p)
+		s.Succeeded(t0, 0, false)
+		want := t0.Add(p.Default)
+		if due := s.Press(t0.Add(5 * time.Second)); !due.Equal(want) {
 			t.Fatalf("Press = %v, want %v", due, want)
 		}
 	})

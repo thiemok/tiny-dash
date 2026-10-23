@@ -21,9 +21,11 @@ type Policy struct {
 	// Default is the delay after a successful fetch whose response carried no
 	// usable hint.
 	Default time.Duration
-	// Min and Max clamp the server's hint. Min also spaces button presses
-	// from the previous fetch, so the panel is never refreshed back to back.
+	// Min and Max clamp the server's hint.
 	Min, Max time.Duration
+	// PressMin is the earliest a button press forces a fetch after the
+	// previous one, so the panel is never refreshed back to back.
+	PressMin time.Duration
 	// Retry spaces the attempts after a failed fetch.
 	Retry backoff.Exponential
 }
@@ -93,12 +95,12 @@ func (s *Schedule) Failed(now time.Time, rnd uint32) time.Duration {
 func (s *Schedule) Failures() uint { return s.policy.Retry.Attempts() }
 
 // Press records a button press at now and returns when the forced fetch is
-// due: at once, or Min after the previous fetch if that is later. It never
-// postpones a fetch that is due earlier anyway.
+// due: at once, or PressMin after the previous fetch if that is later. It
+// never postpones a fetch that is due earlier anyway.
 func (s *Schedule) Press(now time.Time) time.Time {
 	due := now
 	if !s.last.IsZero() {
-		if earliest := s.last.Add(s.policy.Min); earliest.After(due) {
+		if earliest := s.last.Add(s.policy.PressMin); earliest.After(due) {
 			due = earliest
 		}
 	}

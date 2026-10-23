@@ -80,11 +80,15 @@ const (
 	retryMax = 10 * time.Minute
 )
 
-// refreshButton forces a fetch; the others are only logged, which is how
-// their wiring is checked on hardware. buttonPollTime stays below the
-// controller's 50 ms debounce so a short press is not missed.
+// refreshButton forces a fetch, no sooner than pressMinGap after the previous
+// one. That is shorter than MIN_REFRESH_INTERVAL because the LED is too weak
+// to acknowledge a press, so the panel itself has to change soon. The other
+// buttons are only logged, which is how their wiring is checked on hardware.
+// buttonPollTime stays below the controller's 50 ms debounce so a short
+// press is not missed.
 const (
 	refreshButton  = 0
+	pressMinGap    = 30 * time.Second
 	buttonNames    = "ABCD"
 	buttonPollTime = 20 * time.Millisecond
 )
@@ -172,10 +176,11 @@ func main() {
 	f.hdr.ConfigBufferGrowth(false)
 	f.hdr.Reset(f.hdrBuf, maxHeaderPairs)
 	sched := refresh.New(refresh.Policy{
-		Default: time.Duration(config.RefreshInterval) * time.Second,
-		Min:     time.Duration(config.MinRefreshInterval) * time.Second,
-		Max:     time.Duration(config.MaxRefreshInterval) * time.Second,
-		Retry:   backoff.Exponential{Min: retryMin, Max: retryMax},
+		Default:  time.Duration(config.RefreshInterval) * time.Second,
+		Min:      time.Duration(config.MinRefreshInterval) * time.Second,
+		Max:      time.Duration(config.MaxRefreshInterval) * time.Second,
+		PressMin: pressMinGap,
+		Retry:    backoff.Exponential{Min: retryMin, Max: retryMax},
 	})
 	ctx := context.Background()
 	var prev, cur runtime.MemStats
