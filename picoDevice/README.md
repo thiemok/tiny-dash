@@ -91,6 +91,12 @@ the e-ink refresh (`display.Update`, about 22 s on the 7.3" Spectra 6); a cycle 
 spends about 1.5 s on the fetch over https (the DNS answer is cached, the TLS handshake
 takes about 0.25 s and the 192,000 B body about 1.2 s).
 
+The request carries `If-None-Match` with the ETag of the image on the panel. The API derives
+it from the data the dashboard shows, so while that stays the same it answers `304 Not
+Modified` (with a new delay) and the device skips both the 192,000 B body and the panel
+refresh. The ETag is only kept once its image is on the panel, and the device asks for the
+full image again after a button press or when the panel has not been redrawn for 24 h.
+
 A failed fetch or panel update is retried after 30 s, doubling up to 10 min, whatever the
 server asked for last; three network failures in a row reconnect WiFi at once.
 

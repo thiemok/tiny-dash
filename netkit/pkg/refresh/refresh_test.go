@@ -172,3 +172,31 @@ func TestDoesNotAllocate(t *testing.T) {
 		t.Fatalf("allocs = %v, want 0", allocs)
 	}
 }
+
+func TestParseETag(t *testing.T) {
+	tests := []struct {
+		in string
+		ok bool
+	}{
+		{`"0123456789abcdef"`, true},
+		{`0123456789abcdef`, false},
+		{`W/"0123456789abcdef"`, false},
+		{`"0123456789ABCDEF"`, false},
+		{`"0123456789abcde"`, false},
+		{`"` + NoETag + `"`, false},
+		{``, false},
+	}
+	for _, tt := range tests {
+		var dst [ETagLen]byte
+		ok := ParseETag([]byte(tt.in), &dst)
+		if ok != tt.ok {
+			t.Errorf("ParseETag(%q) ok = %v, want %v", tt.in, ok, tt.ok)
+		}
+		if ok && string(dst[:]) != tt.in[1:len(tt.in)-1] {
+			t.Errorf("ParseETag(%q) = %q", tt.in, dst[:])
+		}
+	}
+	if len(NoETag) != ETagLen {
+		t.Fatalf("len(NoETag) = %d, want %d", len(NoETag), ETagLen)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -80,6 +81,10 @@ const (
 	retryMax = 10 * time.Minute
 )
 
+// maxImageAge forces a full image after a day of 304s, so the panel is
+// redrawn at least daily whatever the server's ETag says.
+const maxImageAge = 24 * time.Hour
+
 // refreshButton forces a fetch, no sooner than pressMinGap after the previous
 // one. That is shorter than MIN_REFRESH_INTERVAL because the LED is too weak
 // to acknowledge a press, so the panel itself has to change soon. The other
@@ -100,8 +105,8 @@ var logBuf [1024]byte
 
 const logFlushTimeout = 2 * time.Second
 
-// The image response header is ~170 bytes (Content-Length, Content-Type,
-// Date, Connection, X-Refresh-After); leave room for a reverse proxy's
+// The image response header is ~200 bytes (Content-Length, Content-Type,
+// Date, Connection, X-Refresh-After, ETag); leave room for a reverse proxy's
 // additions.
 const (
 	headerBufSize  = 512
@@ -144,7 +149,7 @@ func main() {
 	link.connect()
 
 	lstack := &link.stack
-	req := buildHTTPRequest(requestURI, apiURL)
+	req, etagSlot := buildHTTPRequest(requestURI, apiURL)
 	rxShare := bufshare.New(make([]byte, rxBufSize))
 	udpc, err := newUDPConn(rxShare)
 	util.RequireNoError(err, "configuring the UDP conn")
@@ -154,6 +159,7 @@ func main() {
 		resolver:     newResolver(logger, apiURL, link, udpc),
 		port:         apiURL.Port,
 		req:          req,
+		etagSlot:     etagSlot,
 		hdrBuf:       make([]byte, 0, headerBufSize),
 		rxShare:      rxShare,
 		txBuf:        make([]byte, txBufSize(len(req), apiURL.Scheme == apiurl.SchemeHTTPS)),
@@ -195,7 +201,11 @@ func main() {
 		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "dns", !f.resolver.IsStatic(), "expectedBytes", len(f.framebuf))
 	}
 	fetchFailures := 0
+	var lastShown time.Time
 	for cycle := 1; ; cycle++ {
+		if !lastShown.IsZero() && time.Since(lastShown) >= maxImageAge {
+			f.forgetImage()
+		}
 		if !link.up() || fetchFailures >= maxFetchFailures {
 			// The display keeps showing the last image while offline.
 			logger.LogAttrs(ctx, slog.LevelWarn, "wifi link lost; reconnecting",
@@ -228,17 +238,26 @@ func main() {
 			fetchFailures++
 		}
 		ok := err == nil
-		if !ok || !f.imageReady {
+		switch {
+		case ok && f.notModified:
+			// The panel already shows this content; skip the refresh.
+			logger.LogAttrs(ctx, slog.LevelInfo, "image unchanged", slog.Duration("handshake", f.handshakeTook()))
+		case !ok || !f.imageReady:
 			// Only a complete image is ever shown: a failed fetch leaves
 			// framebuf partly written, or holding the TLS handshake's scratch.
 			ok = false
 			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err), slog.Int("failures", fetchFailures))
-		} else if err = display.Update(); err != nil {
-			ok = false
-			logger.LogAttrs(ctx, slog.LevelError, "display update failed", slog.Any("error", err))
-		} else {
+		default:
+			if err = display.Update(); err != nil {
+				ok = false
+				logger.LogAttrs(ctx, slog.LevelError, "display update failed", slog.Any("error", err))
+				break
+			}
+			// Only an image on the panel may be kept by its ETag.
+			f.keepImage()
+			lastShown = time.Now()
 			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)),
-				slog.Duration("handshake", f.handshakeTook()), slog.Duration("body", f.bodyTook))
+				slog.Duration("handshake", f.handshakeTook()), slog.Duration("body", f.bodyTook), slog.Bool("etag", f.etagOK))
 			if led != nil {
 				// A forced refresh is on the panel.
 				led.Off()
@@ -286,7 +305,10 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelInfo, "next fetch", slog.Duration("in", wait),
 				slog.String("source", refresh.SourceRetry.String()), slog.Uint64("failures", uint64(sched.Failures())))
 		}
-		waitForFetch(logger, sched, buttons, led)
+		if waitForFetch(logger, sched, buttons, led) {
+			// A press asks for the image even if it is unchanged.
+			f.forgetImage()
+		}
 	}
 }
 
@@ -315,12 +337,13 @@ func initButtons(logger *slog.Logger, display common.Display) (*common.ButtonCon
 // waitForFetch sleeps until sched's next fetch is due, polling buttons so a
 // press of refreshButton brings the fetch forward and lights led until the
 // next image is on the panel. A press during the fetch or the panel refresh
-// was latched by the button interrupts and is handled on the first poll.
-func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController, led *common.LEDController) {
+// was latched by the button interrupts and is handled on the first poll. It
+// reports whether such a press brought the fetch forward.
+func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController, led *common.LEDController) (pressed bool) {
 	for {
 		remaining := time.Until(sched.Next())
 		if remaining <= 0 {
-			return
+			return pressed
 		}
 		if buttons != nil {
 			buttons.Poll()
@@ -333,6 +356,7 @@ func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.
 					logger.LogAttrs(context.Background(), slog.LevelInfo, "button pressed", slog.String("button", name))
 					continue
 				}
+				pressed = true
 				if led != nil {
 					led.On()
 				}
@@ -483,16 +507,23 @@ func newResolver(logger *slog.Logger, apiURL apiurl.URL, link *wifiLink, udpc *u
 	return resolve.New(apiURL.Host, d.lookup, resolve.Policy{MaxTTL: dnsMaxAge, MaxDialFailures: maxDialFailures})
 }
 
-func buildHTTPRequest(requestURI string, apiURL apiurl.URL) []byte {
+// buildHTTPRequest returns the image request and the slot in it that holds
+// the If-None-Match ETag's hex digits, refresh.NoETag until an image is shown.
+func buildHTTPRequest(requestURI string, apiURL apiurl.URL) (req, etagSlot []byte) {
 	var reqHdr httpraw.HeaderV1
 	reqHdr.SetMethod("GET")
 	reqHdr.SetRequestTarget(requestURI)
 	reqHdr.SetProtocol("HTTP/1.1")
 	reqHdr.Set("Host", apiURL.HostHeader())
 	reqHdr.Set("Connection", "close")
-	reqBytes, err := reqHdr.AppendRequest(nil)
+	reqHdr.Set("If-None-Match", `"`+refresh.NoETag+`"`)
+	req, err := reqHdr.AppendRequest(nil)
 	util.RequireNoError(err, "building HTTP request")
-	return reqBytes
+	i := bytes.Index(req, []byte(refresh.NoETag))
+	if i < 0 {
+		panic("building HTTP request: no ETag slot")
+	}
+	return req, req[i : i+refresh.ETagLen]
 }
 
 // fetcher holds everything a refresh cycle needs so that fetch does not
@@ -503,9 +534,16 @@ type fetcher struct {
 	resolver *resolve.Resolver
 	port     uint16
 	req      []byte
-	conn     tcp.Conn
-	hdr      httpraw.HeaderV1
-	hdrBuf   []byte
+	// etagSlot is the If-None-Match value inside req.
+	etagSlot []byte
+	// etag is the ETag of the image in framebuf, etagOK false if it had
+	// none; keepImage moves it into etagSlot once the image is shown.
+	etag        [refresh.ETagLen]byte
+	etagOK      bool
+	notModified bool
+	conn        tcp.Conn
+	hdr         httpraw.HeaderV1
+	hdrBuf      []byte
 	// rxShare is the conn's receive buffer, shared with DNS lookups.
 	rxShare  *bufshare.Buffer
 	rxUser   bufshare.User
@@ -582,6 +620,7 @@ func nanotime() int64 { return int64(time.Since(bootTime)) }
 // stage alongside the error so that callers need not wrap it.
 func (f *fetcher) fetch() (stage string, err error) {
 	f.imageReady = false
+	f.notModified = false
 	f.hintOK = false
 	if f.tls != nil && !f.tls.clock.Synced() {
 		return "clock", errClockNotSynced
@@ -684,6 +723,14 @@ func (f *fetcher) fetch() (stage string, err error) {
 	}
 
 	statusCode, statusText := hdr.Status()
+	f.respondedAt = time.Now()
+	f.hint, f.hintOK = refresh.ParseHint(hdr.GetFold(refresh.HintHeader))
+	if bytesString(statusCode) == "304" {
+		// No body: the shown image is still current.
+		f.close()
+		f.notModified = true
+		return "", nil
+	}
 	if len(statusCode) == 3 && statusCode[0] == '3' {
 		location := hdr.GetFold("Location")
 		f.close()
@@ -703,8 +750,7 @@ func (f *fetcher) fetch() (stage string, err error) {
 		return "status", errHTTPStatus
 	}
 
-	f.respondedAt = time.Now()
-	f.hint, f.hintOK = refresh.ParseHint(hdr.GetFold(refresh.HintHeader))
+	f.etagOK = refresh.ParseETag(hdr.GetFold("ETag"), &f.etag)
 
 	initialBody, err := hdr.Body()
 	if err != nil {
@@ -746,6 +792,19 @@ func (f *fetcher) fetch() (stage string, err error) {
 	f.imageReady = true
 	return "", nil
 }
+
+// keepImage asks the server to answer 304 while the content of the image
+// just shown stays the same.
+func (f *fetcher) keepImage() {
+	if !f.etagOK {
+		f.forgetImage()
+		return
+	}
+	copy(f.etagSlot, f.etag[:])
+}
+
+// forgetImage makes the next fetch get the image in full.
+func (f *fetcher) forgetImage() { copy(f.etagSlot, refresh.NoETag) }
 
 // imageIdle reports whether framebuf holds no image waiting to be shown, so
 // the TLS handshake may borrow it.

@@ -162,11 +162,24 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setRefreshHint(ctx, w, meta, time.Now())
+	etag := imageETag(meta[etagMeta], colorDepth)
+	notModified := etag != "" && r.Header.Get("If-None-Match") == etag
+	trace.SpanFromContext(ctx).SetAttributes(attrRenderNotModified.Bool(notModified))
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+	}
+	if notModified {
+		// The device keeps showing its image and skips the panel refresh.
+		w.WriteHeader(http.StatusNotModified)
+		slog.InfoContext(ctx, "image unchanged", "width", width, "height", height, "color_depth", colorDepth)
+		return
+	}
+
 	_, span := tracer.Start(ctx, "render.PackImage", trace.WithAttributes(attribute.Int("tinydash.render.color_depth", colorDepth)))
 	packed := render.PackImage(img, width, height, colorDepth, palette)
 	span.End()
 
-	setRefreshHint(ctx, w, meta, time.Now())
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(packed)))
 	w.Write(packed)

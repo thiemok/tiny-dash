@@ -28,6 +28,8 @@ type DashboardHandler struct {
 	tmpl     *template.Template
 	haClient *homeassistant.Client
 	config   *config.Config
+	// version is the contentVersion that page content hashes include.
+	version string
 }
 
 // NewDashboardHandler creates a dashboard handler. fsys must contain templates/ at root.
@@ -36,10 +38,15 @@ func NewDashboardHandler(fsys fs.FS, haClient *homeassistant.Client, cfg *config
 	if err != nil {
 		return nil, fmt.Errorf("loading templates: %w", err)
 	}
+	version, err := contentVersion(fsys)
+	if err != nil {
+		return nil, err
+	}
 	return &DashboardHandler{
 		tmpl:     tmpl,
 		haClient: haClient,
 		config:   cfg,
+		version:  version,
 	}, nil
 }
 
@@ -140,7 +147,6 @@ const (
 type templateData struct {
 	Width        int
 	Height       int
-	Time         string
 	Cells        []hourCell // 24-hour day-curve clock strip
 	Weekday      string
 	Day          string
@@ -150,6 +156,7 @@ type templateData struct {
 	Calendar     *calendarView
 	Departures   *departuresView
 	NextRefresh  string // RFC 3339, see nextRefreshMeta
+	ETag         string // content hash, see etagMeta
 }
 
 // hourCells builds the 24-hour day-curve strip for the given time. Minute is
@@ -196,7 +203,6 @@ func (h *DashboardHandler) newTemplateData(ctx context.Context, width, height in
 	data := templateData{
 		Width:    width,
 		Height:   height,
-		Time:     now.Format("15:04"),
 		Cells:    hourCells(now, step),
 		Weekday:  strings.ToUpper(now.Format("Monday")),
 		Day:      now.Format("2 Jan"),
@@ -502,6 +508,13 @@ func (h *DashboardHandler) handleDashboard(w http.ResponseWriter, r *http.Reques
 	mock := r.URL.Query().Get("mock") == "1"
 	data := h.newTemplateData(r.Context(), width, height, palette, mock)
 	data.ShowSwatches = r.URL.Query().Get("swatches") == "1"
+	hash, err := data.contentHash(h.version)
+	if err != nil {
+		// The image then carries no ETag and is always sent in full.
+		telemetry.RecordError(trace.SpanFromContext(r.Context()), err)
+		slog.ErrorContext(r.Context(), "dashboard content hash failed", "error", err)
+	}
+	data.ETag = hash
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {

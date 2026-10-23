@@ -5,6 +5,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>tiny-dash</title>
         {{with .NextRefresh}}<meta name="tinydash-next-refresh" content="{{.}}" />{{end}}
+        {{with .ETag}}<meta name="tinydash-etag" content="{{.}}" />{{end}}
         <style>
             /* Panel colours. Every colour on the page is one of these six exact
                values, so the screenshot maps 1:1 onto the e-ink palette and the
