@@ -107,6 +107,20 @@ func TestPress(t *testing.T) {
 			t.Fatalf("Press = %v, want %v", due, now)
 		}
 	})
+	t.Run("cuts a failure backoff short", func(t *testing.T) {
+		// Only a successful fetch refreshes the panel, so a press during the
+		// backoff is spaced from that one, not from the failed attempt.
+		s := New(policy)
+		s.Succeeded(t0, time.Hour, true)
+		failedAt := t0.Add(time.Hour)
+		for range 5 {
+			s.Failed(failedAt, rndTop)
+		}
+		now := failedAt.Add(time.Second)
+		if due := s.Press(now); !due.Equal(now) {
+			t.Fatalf("Press = %v, want %v", due, now)
+		}
+	})
 	t.Run("never postpones an earlier fetch", func(t *testing.T) {
 		p := policy
 		p.Default = 10 * time.Second // below PressMin

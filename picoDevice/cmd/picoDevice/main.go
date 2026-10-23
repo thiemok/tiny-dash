@@ -239,11 +239,12 @@ func main() {
 		} else {
 			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)),
 				slog.Duration("handshake", f.handshakeTook()), slog.Duration("body", f.bodyTook))
+			if led != nil {
+				// A forced refresh is on the panel.
+				led.Off()
+			}
 		}
 		f.imageReady = false
-		if led != nil {
-			led.Off()
-		}
 
 		if memTestGC {
 			// Leaves only live objects in heapAlloc, so a leak shows as growth.
@@ -285,10 +286,7 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelInfo, "next fetch", slog.Duration("in", wait),
 				slog.String("source", refresh.SourceRetry.String()), slog.Uint64("failures", uint64(sched.Failures())))
 		}
-		if waitForFetch(logger, sched, buttons) && led != nil {
-			// Lit until the forced refresh is on the panel.
-			led.On()
-		}
+		waitForFetch(logger, sched, buttons, led)
 	}
 }
 
@@ -315,14 +313,14 @@ func initButtons(logger *slog.Logger, display common.Display) (*common.ButtonCon
 }
 
 // waitForFetch sleeps until sched's next fetch is due, polling buttons so a
-// press of refreshButton brings the fetch forward. A press during the fetch
-// or the panel refresh was latched by the button interrupts and is handled
-// on the first poll. It reports whether a press cut the wait short.
-func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController) (pressed bool) {
+// press of refreshButton brings the fetch forward and lights led until the
+// next image is on the panel. A press during the fetch or the panel refresh
+// was latched by the button interrupts and is handled on the first poll.
+func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController, led *common.LEDController) {
 	for {
 		remaining := time.Until(sched.Next())
 		if remaining <= 0 {
-			return pressed
+			return
 		}
 		if buttons != nil {
 			buttons.Poll()
@@ -335,7 +333,9 @@ func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.
 					logger.LogAttrs(context.Background(), slog.LevelInfo, "button pressed", slog.String("button", name))
 					continue
 				}
-				pressed = true
+				if led != nil {
+					led.On()
+				}
 				due := sched.Press(time.Now())
 				logger.LogAttrs(context.Background(), slog.LevelInfo, "button pressed", slog.String("button", name),
 					slog.String("action", "refresh"), slog.Duration("in", time.Until(due)))

@@ -95,7 +95,8 @@ A failed fetch or panel update is retried after 30 s, doubling up to 10 min, wha
 server asked for last; three network failures in a row reconnect WiFi at once.
 
 Button A forces a fetch: at once, or 30 s after the previous one if that is later, so a
-press shows on the panel within about a minute. The LED stays lit until the new image is on the panel. Presses are latched by
+press shows on the panel within about a minute. The LED lights at the press and stays lit
+until the new image is on the panel, across failed attempts. Presses are latched by
 GPIO interrupts (debounced in the handler, no extra goroutine), so one during a fetch or a
 panel refresh is queued and handled when the cycle ends. Every press is logged
 (`button pressed button=A`), which is how the wiring of B-D is checked.
