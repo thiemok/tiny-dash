@@ -1,3 +1,14 @@
+## 0.3.3 (2026-10-23)
+
+### 🩹 Fixes
+
+- pack pixels most significant bits first, as the panel expects ([#25](https://github.com/thiemok/tiny-dash/pull/25))
+
+### ❤️ Thank You
+
+- Claude Opus 5.5
+- Thiemo
+
 ## 0.3.2 (2026-10-22)
 
 This was a version bump only for api to align it with other projects, there were no code changes.
