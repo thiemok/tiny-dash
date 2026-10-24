@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +97,7 @@ func TestQuietHours(t *testing.T) {
 func TestNextClockStep(t *testing.T) {
 	loc := berlin(t)
 	at := func(h, m, s int) time.Time { return time.Date(2026, 10, 23, h, m, s, 0, loc) }
+	utc := func(d, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, time.UTC).In(loc) }
 	tests := []struct {
 		now  time.Time
 		step time.Duration
@@ -104,6 +107,11 @@ func TestNextClockStep(t *testing.T) {
 		{at(14, 5, 0), 5 * time.Minute, at(14, 10, 0)},
 		{at(23, 58, 0), 5 * time.Minute, at(0, 0, 0).AddDate(0, 0, 1)},
 		{at(2, 40, 0), time.Hour, at(3, 0, 0)},
+		// DST ends on 25 Oct 2026 at 01:00 UTC (03:00 CEST -> 02:00 CET): the
+		// steps keep following the wall clock through the repeated hour.
+		{utc(24, 23, 57), 5 * time.Minute, utc(25, 0, 0)}, // 01:57 CEST -> 02:00 CEST
+		{utc(25, 0, 57), 5 * time.Minute, utc(25, 1, 0)},  // 02:57 CEST -> 02:00 CET
+		{utc(25, 0, 30), time.Hour, utc(25, 1, 0)},        // 02:30 CEST -> 02:00 CET
 	}
 	for _, tt := range tests {
 		if got := nextClockStep(tt.now, tt.step); !got.Equal(tt.want) {
@@ -133,6 +141,7 @@ func TestDepartureRowsReportChanges(t *testing.T) {
 	deps := []homeassistant.Departure{
 		{Line: "S8", Planned: now.Add(3 * time.Minute)},
 		{Line: "709", Planned: now.Add(10 * time.Minute), Estimated: now.Add(12 * time.Minute)},
+		{Line: "S11", Planned: now.Add(20 * time.Minute), Cancelled: true},
 	}
 	var cs changes
 	view := departureRows(deps, now, &cs)
@@ -140,8 +149,9 @@ func TestDepartureRowsReportChanges(t *testing.T) {
 		t.Fatalf("Soon = %v, %v; want true, false", view.Departures[0].Soon, view.Departures[1].Soon)
 	}
 	// S8 already turned red, so only its departure counts; 709 turns red at
-	// 14:07 (estimated 14:12) and leaves at 14:12.
-	want := []time.Time{now.Add(3 * time.Minute), now.Add(7 * time.Minute), now.Add(12 * time.Minute)}
+	// 14:07 (estimated 14:12) and leaves at 14:12; the cancelled S11 never
+	// turns red and only drops off at 14:20.
+	want := []time.Time{now.Add(3 * time.Minute), now.Add(7 * time.Minute), now.Add(12 * time.Minute), now.Add(20 * time.Minute)}
 	if len(cs) != len(want) {
 		t.Fatalf("changes = %v, want %v", cs, want)
 	}
@@ -184,6 +194,13 @@ func TestDeparturesRetryOnlyAfterFailedRead(t *testing.T) {
 		{"sensor unreachable", func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "down", http.StatusBadGateway)
 		}, true},
+		{"one sensor unreachable, the other empty", func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "sensor.down") {
+				http.Error(w, "down", http.StatusBadGateway)
+				return
+			}
+			w.Write([]byte(`{"entity_id":"sensor.dep","state":"","attributes":{"times":[]}}`))
+		}, true},
 		{"nothing upcoming", func(w http.ResponseWriter, _ *http.Request) {
 			w.Write([]byte(`{"entity_id":"sensor.dep","state":"","attributes":{"times":[]}}`))
 		}, false},
@@ -194,7 +211,7 @@ func TestDeparturesRetryOnlyAfterFailedRead(t *testing.T) {
 			defer srv.Close()
 			h := &DashboardHandler{
 				haClient: homeassistant.NewClient(srv.URL, "token"),
-				config:   &config.Config{Departures: config.DeparturesConfig{EntityIDs: []string{"sensor.dep"}}, Refresh: refreshCfg},
+				config:   &config.Config{Departures: config.DeparturesConfig{EntityIDs: []string{"sensor.dep", "sensor.down"}}, Refresh: refreshCfg},
 			}
 			now := time.Now()
 			var cs changes
@@ -206,5 +223,98 @@ func TestDeparturesRetryOnlyAfterFailedRead(t *testing.T) {
 				t.Fatalf("changes = %v, want retry %v", cs, tt.wantRetry)
 			}
 		})
+	}
+}
+
+// haServer serves canned JSON bodies by request path and fails every other
+// request.
+func haServer(t *testing.T, bodies map[string]string) *homeassistant.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := bodies[r.URL.Path]
+		if !ok {
+			http.Error(w, "down", http.StatusBadGateway)
+			return
+		}
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return homeassistant.NewClient(srv.URL, "token")
+}
+
+func assertChanges(t *testing.T, cs changes, want []time.Time, source string) {
+	t.Helper()
+	if len(cs) != len(want) {
+		t.Fatalf("changes = %v, want %v", cs, want)
+	}
+	for i := range want {
+		if !cs[i].At.Equal(want[i]) || cs[i].Source != source {
+			t.Fatalf("changes = %v, want %v from %s", cs, want, source)
+		}
+	}
+}
+
+func TestCalendarReportsChanges(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	ts := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339) }
+	events := `[
+		{"summary":"done","start":{"dateTime":"` + ts(-2*time.Hour) + `"},"end":{"dateTime":"` + ts(-time.Hour) + `"}},
+		{"summary":"ongoing","start":{"dateTime":"` + ts(-10*time.Minute) + `"},"end":{"dateTime":"` + ts(20*time.Minute) + `"}},
+		{"summary":"later","start":{"dateTime":"` + ts(time.Hour) + `"},"end":{"dateTime":"` + ts(2*time.Hour) + `"}},
+		{"summary":"all day","start":{"date":"2026-10-23"},"end":{"date":"2026-10-24"}}
+	]`
+	h := &DashboardHandler{
+		haClient: haServer(t, map[string]string{"/api/calendars/calendar.home": events}),
+		config:   &config.Config{Calendar: config.CalendarConfig{EntityIDs: []string{"calendar.home"}}, Refresh: refreshCfg},
+	}
+	var cs changes
+	if view := h.fetchCalendar(context.Background(), now, []calendarColor{{}}, &cs); view == nil || len(view.Timed) != 2 {
+		t.Fatalf("view = %+v, want two timed events", view)
+	}
+	// The ongoing event ends; the later one starts and ends.
+	assertChanges(t, cs, []time.Time{now.Add(20 * time.Minute), now.Add(time.Hour), now.Add(2 * time.Hour)}, sourceCalendar)
+}
+
+func TestWeatherReportsChanges(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	sun := `{"entity_id":"sun.sun","state":"above_horizon","attributes":{"next_rising":"` +
+		now.Add(3*time.Hour).Format(time.RFC3339) + `","next_setting":"` + now.Add(9*time.Hour).Format(time.RFC3339) + `"}}`
+	tests := []struct {
+		name   string
+		bodies map[string]string
+		want   []time.Time
+	}{
+		{"hour, sunrise and sunset", map[string]string{
+			"/api/states/weather.home":            `{"entity_id":"weather.home","state":"sunny","attributes":{"temperature":12}}`,
+			"/api/states/sun.sun":                 sun,
+			"/api/services/weather/get_forecasts": `{"service_response":{}}`,
+		}, []time.Time{nextClockStep(now, time.Hour), now.Add(3 * time.Hour), now.Add(9 * time.Hour)}},
+		{"failed read retries", nil, []time.Time{now.Add(refreshCfg.Retry)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &DashboardHandler{
+				haClient: haServer(t, tt.bodies),
+				config:   &config.Config{Weather: config.WeatherConfig{EntityID: "weather.home"}, Refresh: refreshCfg},
+			}
+			var cs changes
+			h.fetchWeather(context.Background(), now, &cs)
+			assertChanges(t, cs, tt.want, sourceWeather)
+		})
+	}
+}
+
+func TestDashboardCarriesNextRefreshMeta(t *testing.T) {
+	tmpl, err := loadTemplates(os.DirFS("../.."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := tmpl.ExecuteTemplate(&b, "dashboard.html", templateData{NextRefresh: "2026-10-23T12:05:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	want := `<meta name="` + nextRefreshMeta + `" content="2026-10-23T12:05:00Z" />`
+	if !strings.Contains(b.String(), want) {
+		t.Fatalf("dashboard lacks %s", want)
 	}
 }

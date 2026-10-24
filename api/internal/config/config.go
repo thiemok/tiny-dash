@@ -50,7 +50,8 @@ type RefreshConfig struct {
 
 // QuietHoursConfig is a daily window, in the server's local time zone, with
 // its own delay bounds and an hourly clock. Start and End are "15:04"; a
-// window may cross midnight. Leaving Start or End empty disables it.
+// window may cross midnight. Leaving both empty disables it; setting only
+// one is a config error.
 type QuietHoursConfig struct {
 	Start string        `yaml:"start"`
 	End   string        `yaml:"end"`

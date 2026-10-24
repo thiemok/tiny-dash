@@ -43,7 +43,7 @@ func (d Departure) Leaves() time.Time {
 	return d.Estimated
 }
 
-// ErrNoDepartures is returned when the sensors were read but none lists an
+// ErrNoDepartures is returned when every sensor was read but none lists an
 // upcoming departure.
 var ErrNoDepartures = errors.New("no upcoming departures")
 
@@ -207,8 +207,8 @@ func (c *Client) GetUpcomingDepartures(ctx context.Context, entityIDs []string, 
 	}
 	span.SetAttributes(attribute.Int("homeassistant.departures.count", len(all)))
 	if len(all) == 0 {
-		if read == 0 {
-			return nil, telemetry.RecordError(span, fmt.Errorf("none of %d departure sensors could be read", len(entityIDs)))
+		if read < len(entityIDs) {
+			return nil, telemetry.RecordError(span, fmt.Errorf("%d of %d departure sensors could not be read", len(entityIDs)-read, len(entityIDs)))
 		}
 		return nil, telemetry.RecordError(span, fmt.Errorf("%w across %d sensors", ErrNoDepartures, len(entityIDs)))
 	}

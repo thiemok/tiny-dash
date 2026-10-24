@@ -130,9 +130,11 @@ func atClockMinutes(day time.Time, m int) time.Time {
 }
 
 // nextClockStep is the next wall-clock multiple of step after now, counted
-// from midnight so steps stay on the hour in any time zone.
+// from midnight so steps stay on the hour in any time zone. It adds elapsed
+// minutes rather than building a wall time, which a DST fall-back makes
+// ambiguous.
 func nextClockStep(now time.Time, step time.Duration) time.Time {
 	s := int(step / time.Minute)
 	m := now.Hour()*60 + now.Minute()
-	return atClockMinutes(now, (m/s+1)*s)
+	return now.Truncate(time.Minute).Add(time.Duration(s-m%s) * time.Minute)
 }

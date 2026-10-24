@@ -294,7 +294,9 @@ func departureRows(departures []homeassistant.Departure, now time.Time, cs *chan
 			Alerts:    d.Alerts,
 		}
 		view.Departures = append(view.Departures, row)
-		cs.add(now, leaves.Add(-departureSoon), sourceDepartures)
+		if !d.Cancelled {
+			cs.add(now, leaves.Add(-departureSoon), sourceDepartures)
+		}
 		cs.add(now, leaves, sourceDepartures)
 	}
 	return view
