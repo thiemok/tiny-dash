@@ -114,6 +114,11 @@ block in `chart/values.yaml`.
   |---|---|---|---|
   | `tinydash.render.duration` | histogram, `s` | `tinydash.render.output` (`packed`/`png`), `tinydash.render.dither`, `error.type` | Chrome capture + palette reduction, per image request |
   | `tinydash.datasource.failures` | counter, `{failure}` | `tinydash.datasource` | A dashboard section rendered empty because its fetch failed |
+  | `tinydash.refresh.delay` | histogram, `s` | `tinydash.refresh.source`, `tinydash.refresh.quiet` | Delay until the device's next fetch, decided per `/dashboard` render |
+
+  The `GET /dashboard` span also carries the decision: `tinydash.refresh.source` (`clock`,
+  `calendar`, `departures`, `weather`, `quiet_end`, `min`, `max`), `tinydash.refresh.quiet` and
+  `tinydash.refresh.delay_s`.
 
 ### Never put in telemetry
 

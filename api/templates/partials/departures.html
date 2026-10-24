@@ -3,7 +3,7 @@
 {{if .Departures.Departures}}
 <ul class="clip-list">
     {{range .Departures.Departures}}
-    <li class="dep-row{{if .Cancelled}} dep-cancelled{{else if lt .Minutes 5}} dep-soon{{end}}">
+    <li class="dep-row{{if .Cancelled}} dep-cancelled{{else if .Soon}} dep-soon{{end}}">
         <span class="dep-line">{{.Line}}</span>
         <span class="dep-dir">{{.Direction}}</span>
         <span class="dep-eta">{{if .Cancelled}}cancelled{{else}}{{.Time}}{{end}}</span>

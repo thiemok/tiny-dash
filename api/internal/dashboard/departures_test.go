@@ -36,8 +36,8 @@ func TestDeparturesPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := templateData{Departures: &departuresView{Departures: []departureRow{
-		{Line: "U76", Direction: "Krefeld", Minutes: 12, Time: "14:32", Delay: 2},
-		{Line: "S8", Direction: "Hagen", Minutes: 20, Time: "14:40", Delay: 3, Cancelled: true},
+		{Line: "U76", Direction: "Krefeld", Time: "14:32", Delay: 2},
+		{Line: "S8", Direction: "Hagen", Time: "14:40", Delay: 3, Cancelled: true},
 	}}}
 	var out strings.Builder
 	if err := tmpl.ExecuteTemplate(&out, "departures", data); err != nil {

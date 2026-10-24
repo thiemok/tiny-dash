@@ -100,6 +100,7 @@ helm upgrade --install tiny-dash-api ./api/chart -n tiny-dash \
 | `config.weatherEntity` | `weather.home` | `weather.entityId` in `config.yaml` |
 | `config.calendarEntityIds` | `[]` | `calendar.entityIds` in `config.yaml` |
 | `config.departureEntityIds` | `[]` | `departures.entityIds` in `config.yaml` |
+| `config.refresh` | `{}` | `refresh` in `config.yaml`: refresh delay bounds and quiet hours, see `api/config.example.yaml` |
 | `config.extraEnv` | `{}` | Extra `TINYDASH_*` env (override `config.yaml`) |
 | `secret.token` | `""` | HA token; chart-managed Secret |
 | `secret.existingSecret` | `""` | Use a Secret you manage (key `TINYDASH_HA_TOKEN`) |

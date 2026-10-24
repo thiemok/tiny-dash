@@ -14,3 +14,22 @@ departures:
   entityIds:
     - "sensor.station_north_departures"
     - "sensor.station_south_departures"
+
+# When the device fetches next (X-Refresh-After on the image response): at the
+# next moment a section changes (clock step, calendar event start/end,
+# departure turning red or leaving, weather hour, sunrise/sunset), bounded by
+# min and max. All fields are optional; the values below are the defaults.
+refresh:
+  min: 2m
+  max: 1h
+  # Delay after a section failed to load.
+  retry: 2m
+  # Nightly window in the server's local time zone (the one the dashboard
+  # shows), may cross midnight. Inside it the clock steps hourly and the
+  # delay is bounded by these min/max instead; it ends on time. Leave start
+  # and end unset to disable it.
+  quietHours:
+    start: "23:00"
+    end: "06:30"
+    min: 1h
+    max: 4h
