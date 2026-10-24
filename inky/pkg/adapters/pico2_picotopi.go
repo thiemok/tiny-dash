@@ -44,10 +44,17 @@ func (p *Pico2Pin) Configure(mode inky.PinMode) error {
 	switch mode {
 	case inky.PinInput:
 		p.pin.Configure(machine.PinConfig{Mode: machine.PinInput})
+	case inky.PinInputPullUp:
+		p.pin.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
 	case inky.PinOutput:
 		p.pin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 	}
 	return nil
+}
+
+// SetChangeInterrupt calls callback on both edges; the button pins use it.
+func (p *Pico2Pin) SetChangeInterrupt(callback func()) error {
+	return p.pin.SetInterrupt(machine.PinToggle, func(machine.Pin) { callback() })
 }
 
 func (p *Pico2Pin) Set(high bool) {

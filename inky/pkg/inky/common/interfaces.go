@@ -6,6 +6,9 @@ type PinMode uint8
 const (
 	PinInput PinMode = iota
 	PinOutput
+	// PinInputPullUp is an input with the internal pull-up enabled, for
+	// active-low switches that only connect the pin to ground.
+	PinInputPullUp
 )
 
 // Pin interface for GPIO operations
@@ -22,6 +25,14 @@ type Pin interface {
 	// Get reads the pin input state (for input pins)
 	// Returns true if pin is HIGH, false if LOW
 	Get() bool
+}
+
+// InterruptPin is a Pin that can call back whenever its level changes, so
+// an input is noticed while nothing polls it. callback runs in interrupt
+// context: it must be short and must not allocate or block.
+type InterruptPin interface {
+	Pin
+	SetChangeInterrupt(callback func()) error
 }
 
 // I2C interface for EEPROM and other I2C operations

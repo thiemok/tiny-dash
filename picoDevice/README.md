@@ -43,7 +43,8 @@ The picoDevice application:
 | --- | --- | --- |
 | `WIFI_SSID`, `WIFI_PASSWORD` | — | WiFi network to join |
 | `API_URL` | — (required) | API base URL, see [API_URL](#api_url) |
-| `REFRESH_INTERVAL` | `60` | Seconds to sleep after each cycle, see [Refresh cadence](#refresh-cadence) |
+| `REFRESH_INTERVAL` | `60` | Seconds between fetches when the server sends no delay, see [Refresh cadence](#refresh-cadence) |
+| `MIN_REFRESH_INTERVAL`, `MAX_REFRESH_INTERVAL` | `120`, `14400` | Bounds for the server's delay, in seconds, see [Refresh cadence](#refresh-cadence) |
 | `DNS_SERVER` | unset | IPv4 DNS server, used only if DHCP offers none, see [DNS](#dns) |
 | `NTP_SERVER` | `pool.ntp.org` | NTP host name or IPv4 literal, see [Time (NTP)](#time-ntp) |
 | `NTP_TEST_SYNC_INTERVAL`, `MEM_TEST_GC` | unset | Debug-build test knobs, see [Memory test knobs](#memory-test-knobs) |
@@ -81,11 +82,25 @@ followed by `Sent 192000 bytes (800x480, depth=4)`. Switching needs a rebuild an
 
 ### Refresh cadence
 
-`REFRESH_INTERVAL` is the sleep after a cycle, not the cycle period. One cycle is the fetch
-(about 1.5 s over https: the DNS answer is cached, the TLS handshake takes about 0.25 s and
-the 192,000 B body about 1.2 s) plus the e-ink refresh (`display.Update`, about 22 s on the
-7.3" Spectra 6) plus the sleep. With `REFRESH_INTERVAL=60` consecutive requests in the API
-log are about 84 s apart.
+The server decides when the device fetches next: the image response carries
+`X-Refresh-After: <seconds>`, counted from when the response arrived. The device clamps it
+to `[MIN_REFRESH_INTERVAL, MAX_REFRESH_INTERVAL]`, so a bad value can neither refresh the
+panel back to back nor leave it stale for long. A response without the header waits
+`REFRESH_INTERVAL` instead. The intervals run from response to response, so they include
+the e-ink refresh (`display.Update`, about 22 s on the 7.3" Spectra 6); a cycle also
+spends about 1.5 s on the fetch over https (the DNS answer is cached, the TLS handshake
+takes about 0.25 s and the 192,000 B body about 1.2 s).
+
+A failed fetch or panel update is retried after 30 s, doubling up to 10 min, whatever the
+server asked for last; three network failures in a row reconnect WiFi at once.
+
+Button A forces a fetch: at once, or 30 s after the previous one if that is later, so a
+press shows on the panel within about a minute. The LED lights when the press is handled
+(at once between cycles, after the current one otherwise) and stays lit until the new
+image is on the panel, across failed attempts. Presses are latched by
+GPIO interrupts (debounced in the handler, no extra goroutine), so one during a fetch or a
+panel refresh is queued and handled when the cycle ends. Every press is logged
+(`button pressed button=A`), which is how the wiring of B-D is checked.
 
 ### API_URL
 
