@@ -118,7 +118,9 @@ block in `chart/values.yaml`.
 
   The `GET /dashboard` span also carries the decision: `tinydash.refresh.source` (`clock`,
   `calendar`, `departures`, `weather`, `quiet_end`, `min`, `max`), `tinydash.refresh.quiet` and
-  `tinydash.refresh.delay_s`.
+  `tinydash.refresh.delay_s`. The `GET /api/dashboard/image` span carries
+  `tinydash.render.not_modified` (answered 304 because the device's `If-None-Match` matched the
+  content's ETag).
 
 ### Never put in telemetry
 

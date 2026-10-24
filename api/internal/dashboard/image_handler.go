@@ -141,6 +141,24 @@ func setRefreshHint(ctx context.Context, w http.ResponseWriter, meta map[string]
 	w.Header().Set(refreshHintHeader, strconv.FormatInt(secs, 10))
 }
 
+// writeNotModified sets the ETag of the packed image made from the page with
+// meta and, if the request's If-None-Match matches it, answers 304 and
+// reports true: the device keeps showing its image and skips the panel
+// refresh. Headers set before it, such as X-Refresh-After, go out with the
+// 304.
+func writeNotModified(w http.ResponseWriter, r *http.Request, meta map[string]string, colorDepth int) bool {
+	etag := imageETag(meta[etagMeta], colorDepth)
+	if etag == "" {
+		return false
+	}
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") != etag {
+		return false
+	}
+	w.WriteHeader(http.StatusNotModified)
+	return true
+}
+
 func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	slog.InfoContext(ctx, "image request", "host", r.Host)
@@ -162,11 +180,18 @@ func (h *ImageHandler) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setRefreshHint(ctx, w, meta, time.Now())
+	notModified := writeNotModified(w, r, meta, colorDepth)
+	trace.SpanFromContext(ctx).SetAttributes(attrRenderNotModified.Bool(notModified))
+	if notModified {
+		slog.InfoContext(ctx, "image unchanged", "width", width, "height", height, "color_depth", colorDepth)
+		return
+	}
+
 	_, span := tracer.Start(ctx, "render.PackImage", trace.WithAttributes(attribute.Int("tinydash.render.color_depth", colorDepth)))
 	packed := render.PackImage(img, width, height, colorDepth, palette)
 	span.End()
 
-	setRefreshHint(ctx, w, meta, time.Now())
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(packed)))
 	w.Write(packed)

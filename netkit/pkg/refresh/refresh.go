@@ -134,3 +134,28 @@ func ParseHint(b []byte) (d time.Duration, ok bool) {
 	}
 	return time.Duration(secs) * time.Second, true
 }
+
+// ETagLen is the length of the API's image ETag in hex digits, without the
+// quotes. Its fixed width lets the device keep the last one in a slot of its
+// prebuilt request.
+const ETagLen = 16
+
+// NoETag fills the request's ETag slot while the device has no image to keep:
+// not hex, so it never matches, and the server always sends the image.
+const NoETag = "----------------"
+
+// ParseETag copies the ETag header value b, a quoted string of ETagLen hex
+// digits, into dst without the quotes. ok is false for any other value,
+// which the caller treats as no ETag.
+func ParseETag(b []byte, dst *[ETagLen]byte) (ok bool) {
+	if len(b) != ETagLen+2 || b[0] != '"' || b[len(b)-1] != '"' {
+		return false
+	}
+	for _, c := range b[1 : len(b)-1] {
+		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	copy(dst[:], b[1:len(b)-1])
+	return true
+}

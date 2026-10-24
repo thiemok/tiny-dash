@@ -27,6 +27,9 @@ var (
 	attrRefreshQuiet = attribute.Key("tinydash.refresh.quiet")
 	// attrRefreshDelay is the decided delay until the next refresh, in seconds (span only).
 	attrRefreshDelay = attribute.Key("tinydash.refresh.delay_s")
+	// attrRenderNotModified is whether an image request was answered 304 because the device's
+	// If-None-Match matched the content's ETag (span only).
+	attrRenderNotModified = attribute.Key("tinydash.render.not_modified")
 )
 
 var (
