@@ -80,13 +80,13 @@ type calendarView struct {
 
 // departureRow holds a single upcoming departure for the template.
 type departureRow struct {
-	Line       string
-	Direction  string
-	Minutes    int    // minutes until departure
-	MinutesStr string // "now", "5 min", "1 h 10"
-	Delay      int    // minutes late (0 = on time)
-	Cancelled  bool
-	Alerts     bool
+	Line      string
+	Direction string
+	Minutes   int    // minutes until departure
+	Time      string // planned departure, "15:04"; Delay is shown next to it
+	Delay     int    // minutes late (0 = on time)
+	Cancelled bool
+	Alerts    bool
 }
 
 // departuresView holds the list of upcoming departures.
@@ -202,20 +202,15 @@ func (h *DashboardHandler) newTemplateData(ctx context.Context, width, height in
 	return data
 }
 
-// formatMinutesUntil produces a compact "in X" style label.
-func formatMinutesUntil(m int) string {
-	if m <= 0 {
-		return "now"
+// departureTime formats the planned departure in now's zone. A clock time,
+// unlike "in 5 min", stays valid until the departure drops off the list, so
+// the panel need not be refreshed every minute.
+func departureTime(d homeassistant.Departure, now time.Time) string {
+	t := d.Planned
+	if t.IsZero() {
+		t = d.Estimated
 	}
-	if m < 60 {
-		return fmt.Sprintf("%d min", m)
-	}
-	h := m / 60
-	rem := m % 60
-	if rem == 0 {
-		return fmt.Sprintf("%d h", h)
-	}
-	return fmt.Sprintf("%d h %02d", h, rem)
+	return t.In(now.Location()).Format("15:04")
 }
 
 // startFetch opens the span for one dashboard data source fetch.
@@ -251,11 +246,11 @@ func (h *DashboardHandler) fetchDepartures(ctx context.Context, now time.Time) *
 			Line:      d.Line,
 			Direction: d.Direction,
 			Minutes:   d.MinutesUntil(now),
+			Time:      departureTime(d, now),
 			Delay:     d.DelayMinutes(),
 			Cancelled: d.Cancelled,
 			Alerts:    d.Alerts,
 		}
-		row.MinutesStr = formatMinutesUntil(row.Minutes)
 		view.Departures = append(view.Departures, row)
 	}
 

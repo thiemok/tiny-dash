@@ -118,14 +118,15 @@ func mockDepartures(now time.Time) *departuresView {
 		{"S8", "Hagen Hbf", 52, 0, false},
 	}
 	for _, r := range rows {
+		estimated := now.Add(time.Duration(r.afterMin) * time.Minute)
 		row := departureRow{
 			Line:      r.line,
 			Direction: r.direction,
 			Minutes:   r.afterMin,
+			Time:      estimated.Add(-time.Duration(r.delay) * time.Minute).Format("15:04"),
 			Delay:     r.delay,
 			Cancelled: r.cancelled,
 		}
-		row.MinutesStr = formatMinutesUntil(r.afterMin)
 		view.Departures = append(view.Departures, row)
 	}
 	return view
