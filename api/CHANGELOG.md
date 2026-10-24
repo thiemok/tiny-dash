@@ -1,3 +1,16 @@
+## 0.5.0 (2026-10-24)
+
+### 🚀 Features
+
+- skip unchanged images with an ETag of the dashboard's content ([#29](https://github.com/thiemok/tiny-dash/pull/29))
+- **api:** decide the next device refresh from the dashboard content ([#28](https://github.com/thiemok/tiny-dash/pull/28))
+- **api:** show departures as planned clock time plus delay ([#27](https://github.com/thiemok/tiny-dash/pull/27))
+
+### ❤️ Thank You
+
+- Claude Opus 5.5
+- Thiemo
+
 ## 0.4.1 (2026-10-23)
 
 ### 🩹 Fixes
