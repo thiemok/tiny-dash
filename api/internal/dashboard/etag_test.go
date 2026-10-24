@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -118,6 +120,27 @@ func TestWriteNotModified(t *testing.T) {
 				t.Error("wrote a status although the image is to be sent")
 			}
 		})
+	}
+}
+
+func TestTemplateWritesETagMeta(t *testing.T) {
+	tmpl, err := loadTemplates(os.DirFS("../.."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := func(d templateData) string {
+		t.Helper()
+		var b strings.Builder
+		if err := tmpl.ExecuteTemplate(&b, "dashboard.html", d); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
+	}
+	if page, want := render(templateData{ETag: "abc"}), `<meta name="`+etagMeta+`" content="abc"`; !strings.Contains(page, want) {
+		t.Errorf("page lacks %s, so the image would carry no ETag", want)
+	}
+	if page := render(templateData{}); strings.Contains(page, etagMeta) {
+		t.Error("page without a content hash still has an ETag meta tag")
 	}
 }
 
