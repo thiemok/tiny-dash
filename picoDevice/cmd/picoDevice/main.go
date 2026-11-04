@@ -145,6 +145,13 @@ func main() {
 	dnsFallback := parseDNSServer(logger)
 	display, requestURI := initDisplay(logger, apiURL)
 	buttons, led := initButtons(logger, display)
+	common.BusyWaitIdle = func(idle bool) {
+		if idle {
+			clockSlow()
+		} else {
+			clockFast()
+		}
+	}
 	logger.Info("Initializing WiFi...")
 	// Warn keeps the driver from allocating on every reconnect: its Info-level
 	// rxEvent records carry eight attrs, beyond slog.Record's inline five.
@@ -324,6 +331,8 @@ func main() {
 		}
 		if link.off || ok && time.Until(sched.Next()) >= wakeLead+minDoze {
 			link.wifiOff()
+			// The reboot restores the clocks.
+			clockSlow()
 			pressed := waitForFetch(logger, sched, buttons, led, wakeLead)
 			var shownAge time.Duration
 			if !lastShown.IsZero() {
