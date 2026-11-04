@@ -126,7 +126,11 @@ func main() {
 	clock, floorFromBuild := newClock()
 	logger, logHandler := initLogger(logDrainer.Src, clock)
 	defer flushLogOnPanic(logger, logDrainer)
-	time.Sleep(5 * time.Second)
+	carried := loadCarry()
+	if !carried.valid {
+		// Time to attach a serial monitor; reboots between fetches skip it.
+		time.Sleep(5 * time.Second)
+	}
 	logger.Info("tiny-dash picoDevice Starting...")
 	crcFreed, err := releaseCRC32Table()
 	util.RequireNoError(err, "releasing the crc32 table")
@@ -202,6 +206,14 @@ func main() {
 	}
 	fetchFailures := 0
 	var lastShown time.Time
+	if carried.valid && carried.hasETag && !carried.pressed {
+		// The panel still shows the previous boot's image.
+		copy(f.etagSlot, carried.etag[:])
+		lastShown = time.Now().Add(-carried.shownAge)
+	}
+	if carried.pressed && led != nil {
+		led.On()
+	}
 	for cycle := 1; ; cycle++ {
 		if !lastShown.IsZero() && time.Since(lastShown) >= maxImageAge {
 			f.forgetImage()
@@ -248,6 +260,9 @@ func main() {
 			ok = false
 			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err), slog.Int("failures", fetchFailures))
 		default:
+			// The redraw needs no network: power WiFi off for it and the
+			// wait after it.
+			link.wifiOff()
 			if err = display.Update(); err != nil {
 				ok = false
 				// The panel may be left half drawn: never answer it with a 304.
@@ -307,7 +322,17 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelInfo, "next fetch", slog.Duration("in", wait),
 				slog.String("source", refresh.SourceRetry.String()), slog.Uint64("failures", uint64(sched.Failures())))
 		}
-		if waitForFetch(logger, sched, buttons, led) {
+		if link.off || ok && time.Until(sched.Next()) >= wakeLead+minDoze {
+			link.wifiOff()
+			pressed := waitForFetch(logger, sched, buttons, led, wakeLead)
+			var shownAge time.Duration
+			if !lastShown.IsZero() {
+				shownAge = time.Since(lastShown)
+			}
+			logDrainer.Flush(logFlushTimeout)
+			rebootWith(f.etagSlot, pressed, shownAge)
+		}
+		if waitForFetch(logger, sched, buttons, led, 0) {
 			// A press asks for the image even if it is unchanged.
 			f.forgetImage()
 		}
@@ -340,10 +365,11 @@ func initButtons(logger *slog.Logger, display common.Display) (*common.ButtonCon
 // press of refreshButton brings the fetch forward and lights led until the
 // next image is on the panel. A press during the fetch or the panel refresh
 // was latched by the button interrupts and is handled on the first poll. It
-// reports whether such a press brought the fetch forward.
-func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController, led *common.LEDController) (pressed bool) {
+// reports whether such a press brought the fetch forward. It returns lead
+// before the fetch is due, so the caller can prepare the link.
+func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController, led *common.LEDController, lead time.Duration) (pressed bool) {
 	for {
-		remaining := time.Until(sched.Next())
+		remaining := time.Until(sched.Next()) - lead
 		if remaining <= 0 {
 			return pressed
 		}

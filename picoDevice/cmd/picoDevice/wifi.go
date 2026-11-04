@@ -55,6 +55,9 @@ type wifiLink struct {
 
 	failJoins int
 	inited    bool
+	// off is set once wifiOff has powered the chip down; only a reboot
+	// brings it back.
+	off       bool
 	icmpReady bool
 
 	// dnsFallback is preset on every stack reset; a DNS server from DHCP
