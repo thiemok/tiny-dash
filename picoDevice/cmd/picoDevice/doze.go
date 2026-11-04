@@ -7,6 +7,7 @@ import (
 	"machine"
 	"time"
 
+	"github.com/soypat/cyw43439/whd"
 	"github.com/thiemok/tiny-dash/netkit/pkg/refresh"
 )
 
@@ -24,6 +25,8 @@ const (
 	// minDoze is the shortest wait worth powering WiFi off for; below it the
 	// rejoin costs more than the idle it saves.
 	minDoze = 15 * time.Second
+	// leaveTime lets the deauthentication frame go out before power-off.
+	leaveTime = 50 * time.Millisecond
 
 	carryMagic     = 0x7d5b0000
 	carryMagicMask = 0xffff0000
@@ -79,9 +82,19 @@ func rebootWith(etagSlot []byte, pressed bool, shownAge time.Duration) {
 	}
 }
 
-// wifiOff powers the CYW43439 down for the rest of this boot.
+// wifiOff powers the CYW43439 down for the rest of this boot. It leaves the
+// network first: an access point that still holds the association answers
+// the next boot's authentication late, which kept every wake ~2 s longer.
 func (w *wifiLink) wifiOff() {
+	if w.off {
+		return
+	}
 	w.pause()
+	if w.up() {
+		doIoctlSet(w.dev, whd.WLC_DISASSOC, whd.IF_STA, nil)
+		// Give the firmware time to send the deauthentication frame.
+		time.Sleep(leaveTime)
+	}
 	machine.GPIO23.Low() // WL_REG_ON
 	w.off = true
 }
