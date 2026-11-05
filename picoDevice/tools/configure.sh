@@ -25,6 +25,10 @@ if [ -z "$API_URL" ]; then
     exit 1
 fi
 
+# The WPA PSK spares the WiFi chip deriving it at every join; see
+# tools/wpapsk.
+WIFI_PSK=$(go run ./tools/wpapsk)
+
 # Generate config file from environment variables
 echo "Generating configuration..."
 mkdir -p internal/config
@@ -38,6 +42,9 @@ package config
 const (
 	WifiSSID        = "$WIFI_SSID"
 	WifiPassword    = "$WIFI_PASSWORD"
+	// WifiPSK is the WPA PSK derived from WifiSSID and WifiPassword, in hex;
+	// empty if WifiPassword is no WPA passphrase.
+	WifiPSK         = "$WIFI_PSK"
 	APIURL          = "$API_URL"
 	// RefreshInterval is the time between fetches when the server sends no
 	// X-Refresh-After; the server's delay is clamped to [Min, Max].

@@ -163,7 +163,11 @@ func (w *wifiLink) tryConnect() (addr netip.Addr, stage string, err error) {
 			w.logger.LogAttrs(context.Background(), slog.LevelWarn, "test: joining missing SSID to force a join failure",
 				slog.String("ssid", ssid), slog.Int("remaining", w.failJoins))
 		}
-		if err = w.dev.Join(ssid, cyw43439.JoinOptions{Passphrase: config.WifiPassword}); err != nil {
+		key := config.WifiPSK
+		if key == "" {
+			key = config.WifiPassword
+		}
+		if err = w.dev.Join(ssid, cyw43439.JoinOptions{Passphrase: key}); err != nil {
 			return addr, "join", err
 		}
 	}
