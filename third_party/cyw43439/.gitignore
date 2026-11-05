@@ -30,3 +30,6 @@ cmd/cywanalyze/*.txt
 local
 go.work
 go.work.sum
+
+# Vendored: the chip firmware is embedded by firmware_embed.go.
+!firmware/*.bin
