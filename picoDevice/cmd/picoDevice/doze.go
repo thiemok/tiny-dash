@@ -19,9 +19,16 @@ import (
 // carry what the next boot needs.
 
 const (
-	// wakeLead is how long before the next fetch is due the device reboots:
-	// boot, Init, Join and DHCP take ~6 s.
+	// wakeLead is how long before the next fetch is due the device reboots
+	// when it has not timed a wake yet, as after a cold boot.
 	wakeLead = 6 * time.Second
+	// A timed wake, from reset to the response, sets the lead of the next
+	// reboot plus wakeMargin, within [minWakeLead, maxWakeLead]. A lead
+	// longer than the wake makes the fetch early, and since the next one is
+	// scheduled from the response, every cycle shorter than the interval.
+	wakeMargin  = 500 * time.Millisecond
+	minWakeLead = 2500 * time.Millisecond
+	maxWakeLead = 8 * time.Second
 	// minDoze is the shortest wait worth powering WiFi off for; below it the
 	// rejoin costs more than the idle it saves.
 	minDoze = 15 * time.Second
@@ -107,4 +114,13 @@ func (w *wifiLink) wifiOff() {
 	}
 	machine.GPIO23.Low() // WL_REG_ON
 	w.off = true
+}
+
+// leadFor returns how long before a fetch to reboot, given how long this
+// boot took from reset to its response, or 0 if it did not time one.
+func leadFor(wake time.Duration) time.Duration {
+	if wake == 0 {
+		return wakeLead
+	}
+	return min(max(wake+wakeMargin, minWakeLead), maxWakeLead)
 }

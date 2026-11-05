@@ -126,6 +126,8 @@ func main() {
 	logger, logHandler := initLogger(logDrainer.Src, clock)
 	defer flushLogOnPanic(logger, logDrainer)
 	carried := loadCarry()
+	// bootStart is ~reset: the runtime's clock starts at 0 on every boot.
+	bootStart := time.Now()
 	if !carried.valid {
 		// Time to attach a serial monitor; reboots between fetches skip it.
 		time.Sleep(5 * time.Second)
@@ -333,11 +335,19 @@ func main() {
 			logger.LogAttrs(ctx, slog.LevelInfo, "next fetch", slog.Duration("in", wait),
 				slog.String("source", refresh.SourceRetry.String()), slog.Uint64("failures", uint64(sched.Failures())))
 		}
-		if link.off || ok && time.Until(sched.Next()) >= wakeLead+minDoze {
+		// A carry reboot's wake is what the next reboot repeats; a cold
+		// boot's includes the pause before WiFi and a full channel scan.
+		var wake time.Duration
+		if carried.valid && cycle == 1 && ok {
+			wake = f.respondedAt.Sub(bootStart)
+		}
+		lead := leadFor(wake)
+		if link.off || ok && time.Until(sched.Next()) >= lead+minDoze {
 			link.wifiOff()
 			// The reboot restores the clocks.
 			clockSlow()
-			pressed := waitForFetch(logger, sched, buttons, led, wakeLead)
+			logger.LogAttrs(ctx, slog.LevelInfo, "dozing until reboot", slog.Duration("lead", lead), slog.Duration("wake", wake))
+			pressed := waitForFetch(logger, sched, buttons, led, lead)
 			var shownAge time.Duration
 			if !lastShown.IsZero() {
 				shownAge = time.Since(lastShown)
