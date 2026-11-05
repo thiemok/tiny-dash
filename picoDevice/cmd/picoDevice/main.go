@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"machine"
 	"net/netip"
 	"os"
 	"runtime"
@@ -338,6 +337,10 @@ func main() {
 			if !lastShown.IsZero() {
 				shownAge = time.Since(lastShown)
 			}
+			if uartLog {
+				// The UART baud rate follows clk_sys.
+				clockFast()
+			}
 			logDrainer.Flush(logFlushTimeout)
 			rebootWith(f.etagSlot, pressed, shownAge)
 		}
@@ -404,21 +407,6 @@ func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.
 		}
 		time.Sleep(min(remaining, buttonPollTime))
 	}
-}
-
-// initLogDrainer returns a ring buffer drainer to serial running on its own
-// goroutine: TinyGo's USB-CDC Write spins until the host reads, so writing to
-// machine.Serial directly can stall any goroutine that logs, including the
-// network and display paths. Dropped bytes are reported by the drainer itself.
-func initLogDrainer() *logkit.Drainer {
-	drainer := &logkit.Drainer{
-		Src:      logkit.NewRingWriter(logBuf[:]),
-		Dst:      machine.Serial,
-		Ready:    machine.Serial.DTR,
-		Writable: (&usbWaker{}).Writable,
-	}
-	go drainer.Run()
-	return drainer
 }
 
 // flushLogOnPanic routes a panic in main through the log ring before letting

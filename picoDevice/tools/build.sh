@@ -11,6 +11,10 @@ OUTPUT_FILE="$OUTPUT_DIR/picoDevice.uf2"
 # buildUnix is the wall clock's floor: no NTP answer can set it earlier.
 FLAGS=(-target=$TARGET -scheduler=tasks -stack-size=8kb -opt=2 ${PICO_BUILD_TAGS:+-tags=$PICO_BUILD_TAGS}
   -ldflags="-X main.buildUnix=$(date -u +%s)")
+# uartlog sends logs to UART0 (GP0) for the Debug Probe instead of USB.
+if [[ ",$PICO_BUILD_TAGS," == *,uartlog,* ]]; then
+  FLAGS+=(-serial=uart)
+fi
 
 if [ "$1" = flash ]; then
   echo "Flashing picoDevice firmware to Pico 2 W${PICO_BUILD_TAGS:+ (tags: $PICO_BUILD_TAGS)}..."
