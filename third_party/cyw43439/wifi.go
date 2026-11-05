@@ -119,18 +119,17 @@ func (d *Device) initControl(clm string) error {
 		d.set_iovar_n("country", whd.IF_STA, countryInfo[:])
 
 		// set country takes some time, next ioctls fail if we don't wait.
-		time.Sleep(100 * time.Millisecond)
+		// Delays in this sequence follow pico-sdk's cyw43_ll_wifi_on.
+		time.Sleep(50 * time.Millisecond)
 
 		// Set Antenna to chip antenna.
 		d.set_ioctl(whd.WLC_SET_ANTDIV, whd.IF_STA, 0)
 
 		d.set_iovar("bus:txglom", whd.IF_STA, 0)
-		time.Sleep(100 * time.Millisecond)
-
 		d.set_iovar("ampdu_ba_wsize", whd.IF_STA, 8)
-		time.Sleep(100 * time.Millisecond)
-
 		d.set_iovar("ampdu_mpdu", whd.IF_STA, 4)
+		// Unlike pico-sdk, wait here: without it the download runs ~0.45 s
+		// slower, as if the A-MPDU settings did not take.
 		time.Sleep(100 * time.Millisecond)
 
 		// Ignore uninteresting/spammy events.
@@ -148,16 +147,17 @@ func (d *Device) initControl(clm string) error {
 		evts.Put(buf)
 		d.set_iovar_n("bsscfg:event_msgs", whd.IF_STA, buf)
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 
 		// Set wifi up.
 		d.doIoctlSet(whd.WLC_UP, whd.IF_STA, nil)
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 
 		d.set_ioctl(whd.WLC_SET_GMODE, whd.IF_STA, 1) // Set GMODE=auto
 		d.set_ioctl(whd.WLC_SET_BAND, whd.IF_STA, 0)  // Set BAND=any
 
+		// A join right after this fails now and then (SET_SSID: no network).
 		time.Sleep(100 * time.Millisecond)
 	}
 	if modeBluetooth&d.mode != 0 {
@@ -206,6 +206,10 @@ func (d *Device) join_open(ssid string) error {
 // For open networks (secureNetwork=false), success is indicated by SET_SSID with status=0.
 // For secure networks (secureNetwork=true), success is indicated by PSK_SUP with status=6 (KEYED).
 // Reference: https://github.com/embassy-rs/embassy/blob/main/cyw43/src/control.rs#L389-L440
+// joinPollInterval is how often wait_for_join reads the chip's events; the
+// join itself takes a few hundred milliseconds once the key is known.
+const joinPollInterval = 20 * time.Millisecond
+
 func (d *Device) wait_for_join(ssid string, secureNetwork bool, channel uint8) (err error) {
 	d.secureNetwork = secureNetwork
 	// Reset flags for new join attempt. ref: runner.rs:120-122
@@ -232,7 +236,7 @@ func (d *Device) wait_for_join(ssid string, secureNetwork bool, channel uint8) (
 	deadline := time.Now().Add(10 * time.Second)
 	keepGoing := true
 	for keepGoing {
-		time.Sleep(270 * time.Millisecond)
+		time.Sleep(joinPollInterval)
 		err = d.check_status(d._sendIoctlBuf[:])
 		if err != nil {
 			return err
@@ -450,8 +454,7 @@ func (d *Device) Join(ssid string, options JoinOptions) error {
 	if err := d.set_iovar2("bsscfg:sup_wpa_tmo", whd.IF_STA, 0, 2500); err != nil {
 		return err
 	}
-
-	time.Sleep(100 * time.Millisecond)
+	// pico-sdk waits 2 ms before the PMK, embassy 3 ms (below); no more.
 
 	// Set passphrase for WPA/WPA2.
 	// Reference: https://github.com/embassy-rs/embassy/blob/main/cyw43/src/control.rs#L346-L360

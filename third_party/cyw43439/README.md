@@ -25,3 +25,10 @@ replace github.com/soypat/cyw43439 => ../third_party/cyw43439
 `WLC_SET_SSID`, which makes the firmware scan every channel first (~0.8 s more per join).
 `Device.Channel` reports the channel once joined, so a caller can remember
 it. Both are in `wifi.go`; they are meant to go upstream.
+
+Init and Join wait as pico-sdk's `cyw43_ll_wifi_on` does (50 ms after
+`country`, `event_msgs` and `WLC_UP`; 3 ms before the PMK) instead of
+100 ms after every step, and `wait_for_join` polls every 20 ms instead of
+270 ms. Two waits stay at 100 ms because measurements needed them: after the
+A-MPDU settings (without it the download ran ~0.45 s slower) and after
+`WLC_SET_BAND` (without it ~1 in 10 joins failed with "no network").
