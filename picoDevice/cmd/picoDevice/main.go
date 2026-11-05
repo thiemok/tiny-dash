@@ -141,6 +141,10 @@ func main() {
 	logger.LogAttrs(context.Background(), slog.LevelInfo, "wall clock floor", slog.Time("floor", clock.Floor()), slog.Bool("fromBuild", floorFromBuild))
 
 	apiURL := parseAPIURL(logger)
+	var seed *trngSeed
+	if apiURL.Scheme == apiurl.SchemeHTTPS {
+		seed = startTRNGSeed(logger)
+	}
 	dnsFallback := parseDNSServer(logger)
 	display, requestURI := initDisplay(logger, apiURL)
 	buttons, led := initButtons(logger, display)
@@ -182,7 +186,7 @@ func main() {
 	f.imageUser = bufshare.User{Name: "image", Idle: f.imageIdle}
 	util.RequireNoError(f.rto.Configure(nanotime), "configuring the retransmission timer")
 	if apiURL.Scheme == apiurl.SchemeHTTPS {
-		f.tls = newTLSClient(logger, apiURL, clock, f.fbShare)
+		f.tls = newTLSClient(logger, apiURL, clock, f.fbShare, seed)
 	}
 	ntpSync, err := newTimeSync(logger, link, udpc, clock)
 	if err != nil {
