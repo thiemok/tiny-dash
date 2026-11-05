@@ -59,6 +59,10 @@ type wifiLink struct {
 	// brings it back.
 	off       bool
 	icmpReady bool
+	// channel is the network's channel from the last join, 0 if unknown. A
+	// join with it skips the firmware's scan of every channel (~0.8 s); a
+	// stale one fails in ~2 s and the retry scans.
+	channel uint8
 
 	// dnsFallback is preset on every stack reset; a DNS server from DHCP
 	// replaces it.
@@ -167,8 +171,20 @@ func (w *wifiLink) tryConnect() (addr netip.Addr, stage string, err error) {
 		if key == "" {
 			key = config.WifiPassword
 		}
-		if err = w.dev.Join(ssid, cyw43439.JoinOptions{Passphrase: key}); err != nil {
+		opts := cyw43439.JoinOptions{Passphrase: key, Channel: w.channel}
+		if err = w.dev.Join(ssid, opts); err != nil {
+			if w.channel != 0 {
+				// The network may have moved; the next attempt scans.
+				w.logger.LogAttrs(context.Background(), slog.LevelWarn, "join on known channel failed",
+					slog.Int("channel", int(w.channel)))
+				w.channel = 0
+			}
 			return addr, "join", err
+		}
+		if ch, err := w.dev.Channel(); err == nil && ch >= 1 && ch <= maxChannel {
+			w.channel = ch
+		} else {
+			w.channel = 0
 		}
 	}
 	mac, err := w.dev.HardwareAddr6()

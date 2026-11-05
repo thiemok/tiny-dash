@@ -160,6 +160,7 @@ func main() {
 	// rxEvent records carry eight attrs, beyond slog.Record's inline five.
 	// Raise it to Info to see the event status and reason of a failed join.
 	link := newWifiLink(logger, slog.New(logHandler.WithLevel(slog.LevelWarn)), dnsFallback)
+	link.channel = carried.channel
 	link.connect()
 
 	lstack := &link.stack
@@ -346,7 +347,7 @@ func main() {
 				clockFast()
 			}
 			logDrainer.Flush(logFlushTimeout)
-			rebootWith(f.etagSlot, pressed, shownAge)
+			rebootWith(f.etagSlot, pressed, shownAge, link.channel)
 		}
 		if waitForFetch(logger, sched, buttons, led, 0) {
 			// A press asks for the image even if it is unchanged.

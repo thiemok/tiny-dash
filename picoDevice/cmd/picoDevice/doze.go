@@ -32,6 +32,11 @@ const (
 	carryMagicMask = 0xffff0000
 	carryETag      = 1 << 0
 	carryPressed   = 1 << 1
+	// The network's channel, see wifiLink.channel, sits in SCRATCH0's bits
+	// 8-11.
+	carryChannelPos = 8
+	carryChannelMsk = 0xf << carryChannelPos
+	maxChannel      = 14
 )
 
 // carry is the state handed from one boot to the next.
@@ -39,6 +44,7 @@ type carry struct {
 	valid   bool
 	pressed bool
 	hasETag bool
+	channel uint8
 	etag    [refresh.ETagLen]byte
 	// shownAge is how long ago the image on the panel was drawn.
 	shownAge time.Duration
@@ -54,6 +60,7 @@ func loadCarry() (c carry) {
 	c.valid = true
 	c.pressed = s0&carryPressed != 0
 	c.hasETag = s0&carryETag != 0
+	c.channel = uint8(s0 & carryChannelMsk >> carryChannelPos)
 	var raw [refresh.ETagLen / 2]byte
 	binary.LittleEndian.PutUint32(raw[0:], rp.WATCHDOG.SCRATCH1.Get())
 	binary.LittleEndian.PutUint32(raw[4:], rp.WATCHDOG.SCRATCH2.Get())
@@ -63,8 +70,11 @@ func loadCarry() (c carry) {
 }
 
 // rebootWith stores the state for the next boot and resets the device.
-func rebootWith(etagSlot []byte, pressed bool, shownAge time.Duration) {
+func rebootWith(etagSlot []byte, pressed bool, shownAge time.Duration, channel uint8) {
 	s0 := uint32(carryMagic)
+	if channel <= maxChannel {
+		s0 |= uint32(channel) << carryChannelPos
+	}
 	var raw [refresh.ETagLen / 2]byte
 	if _, err := hex.Decode(raw[:], etagSlot); err == nil {
 		s0 |= carryETag

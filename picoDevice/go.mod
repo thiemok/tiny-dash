@@ -30,3 +30,5 @@ replace github.com/thiemok/tiny-dash/logkit => ../logkit
 replace github.com/thiemok/tiny-dash/tinytls => ../tinytls
 
 replace github.com/soypat/lcrypto => ../third_party/lcrypto
+
+replace github.com/soypat/cyw43439 => ../third_party/cyw43439
