@@ -44,6 +44,16 @@ func BusyWait(busyPin Pin, timeoutSeconds int) bool {
 	return false // Timeout
 }
 
+// BulkWrite, if set, is called with true before SendCommand writes a data
+// block of at least BulkWriteMin bytes and with false once it is out, so the
+// board can slow its clocks while the CPU only waits for the transfer. It
+// must keep the SPI clock rate unchanged.
+var BulkWrite func(start bool)
+
+// BulkWriteMin is the smallest data block SendCommand reports to BulkWrite;
+// smaller ones are over before a clock switch would pay.
+const BulkWriteMin = 4096
+
 // commandBytes[c] == c. As a string constant it stays in flash rather than
 // RAM; SendCommand views one byte of it as the []byte that SPI.Tx only
 // reads, so no per-call buffer is allocated.
@@ -75,7 +85,14 @@ func SendCommand(spi SPI, csPin, dcPin Pin, command byte, data []byte) {
 
 	if data != nil && len(data) > 0 {
 		dcPin.Set(true)
+		bulk := BulkWrite != nil && len(data) >= BulkWriteMin
+		if bulk {
+			BulkWrite(true)
+		}
 		spi.Tx(data, nil)
+		if bulk {
+			BulkWrite(false)
+		}
 	}
 
 	csPin.Set(true)

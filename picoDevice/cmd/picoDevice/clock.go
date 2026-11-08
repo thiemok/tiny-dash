@@ -2,6 +2,7 @@ package main
 
 import (
 	"device/rp"
+	"machine"
 	"runtime/interrupt"
 )
 
@@ -45,4 +46,48 @@ func clockFast() {
 	}
 	interrupt.Restore(mask)
 	clockIsSlow = false
+}
+
+// The panel's 192 KB image goes out over SPI1 by DMA in ~1.8 s at 1 MHz while
+// the CPU only waits, so it can run slow too. SPI1's divider then has to
+// shrink by the same factor as clk_peri, so the panel still sees exactly the
+// same SCK.
+
+const xoscHz = 12_000_000
+
+var panelSCR uint32 // SPI1's serial clock rate field at full speed
+
+// panelBulkWrite is the inky common.BulkWrite hook. It leaves the clocks
+// alone if the current divider has no exact equivalent at 12 MHz.
+func panelBulkWrite(start bool) {
+	const (
+		pos = rp.SPI0_SSPCR0_SCR_Pos
+		msk = rp.SPI0_SSPCR0_SCR_Msk
+	)
+	spi := rp.SPI1
+	if !start {
+		if clockIsSlow {
+			spi.SSPCR0.ReplaceBits(panelSCR<<pos, msk, 0)
+			clockFast()
+		}
+		return
+	}
+	if clockIsSlow || debugBuild {
+		return
+	}
+	cpsr := spi.SSPCPSR.Get()
+	scr := (spi.SSPCR0.Get() & msk) >> pos
+	// clk_peri cycles per SCK period at full speed, and the same at 12 MHz.
+	cycles := uint64(cpsr) * uint64(scr+1) * xoscHz
+	full := uint64(machine.CPUFrequency())
+	if cpsr == 0 || cycles%full != 0 || (cycles/full)%uint64(cpsr) != 0 {
+		return
+	}
+	slowSCR := (cycles/full)/uint64(cpsr) - 1
+	if slowSCR > msk>>pos {
+		return
+	}
+	panelSCR = scr
+	clockSlow()
+	spi.SSPCR0.ReplaceBits(uint32(slowSCR)<<pos, msk, 0)
 }

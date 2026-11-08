@@ -150,6 +150,7 @@ func main() {
 	dnsFallback := parseDNSServer(logger)
 	display, requestURI := initDisplay(logger, apiURL)
 	buttons, led := initButtons(logger, display)
+	common.BulkWrite = panelBulkWrite
 	common.BusyWaitIdle = func(idle bool) {
 		if idle {
 			clockSlow()
