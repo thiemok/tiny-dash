@@ -357,6 +357,14 @@ func (d *Device) f2PacketAvail() (bool, uint16) {
 	return false, 0
 }
 
+// The chip answers an ioctl within a millisecond or two, so pollForIoctl
+// polls often; it still gives up after ~100 ms as before. waitForCredit, on
+// the data path too, keeps 10 ms: polling it faster made downloads stall.
+const (
+	ioctlPollInterval = 250 * time.Microsecond
+	ioctlPollTries    = int(100 * time.Millisecond / ioctlPollInterval)
+)
+
 // waitForCredit waits for a credit to use for the next transaction
 func (d *Device) waitForCredit(buf []uint32) error {
 	d.trace("waitForCredit:start")
@@ -378,14 +386,14 @@ func (d *Device) waitForCredit(buf []uint32) error {
 // pollForIoctl polls until a control/ioctl/cdc packet is received.
 func (d *Device) pollForIoctl(buf []uint32) ([]byte, error) {
 	d.trace("pollForIoctl:start")
-	for retries := 0; retries < 10; retries++ {
+	for retries := 0; retries < ioctlPollTries; retries++ {
 		buf8, hdr, err := d.tryPoll(buf)
 		if err != nil && err != errNoF2Avail {
 			return nil, err
 		} else if hdr == whd.CONTROL_HEADER {
 			return buf8, nil
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(ioctlPollInterval)
 	}
 	return nil, errors.New("pollForIoctl timeout")
 }

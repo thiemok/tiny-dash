@@ -157,8 +157,9 @@ func (d *Device) initControl(clm string) error {
 		d.set_ioctl(whd.WLC_SET_GMODE, whd.IF_STA, 1) // Set GMODE=auto
 		d.set_ioctl(whd.WLC_SET_BAND, whd.IF_STA, 0)  // Set BAND=any
 
-		// A join right after this fails now and then (SET_SSID: no network).
-		time.Sleep(100 * time.Millisecond)
+		// A join right after this fails now and then (SET_SSID: no network);
+		// 100 ms stopped being enough once ioctl replies were polled faster.
+		time.Sleep(200 * time.Millisecond)
 	}
 	if modeBluetooth&d.mode != 0 {
 		// TODO: flash bt firmware here?

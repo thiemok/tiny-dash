@@ -32,3 +32,8 @@ Init and Join wait as pico-sdk's `cyw43_ll_wifi_on` does (50 ms after
 270 ms. Two waits stay at 100 ms because measurements needed them: after the
 A-MPDU settings (without it the download ran ~0.45 s slower) and after
 `WLC_SET_BAND` (without it ~1 in 10 joins failed with "no network").
+
+`pollForIoctl` polls for the ioctl reply every 250 µs instead of 10 ms (same
+~100 ms timeout); `waitForCredit` keeps 10 ms, because polling it faster made
+downloads stall on the data path. With the faster replies the wait after
+`WLC_SET_BAND` had to grow to 200 ms to keep joins from failing.
