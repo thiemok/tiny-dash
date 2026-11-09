@@ -4,6 +4,7 @@ import (
 	"device/arm"
 	"device/rp"
 	"runtime/interrupt"
+	"runtime/volatile"
 )
 
 // While the device only waits, for the next fetch or for the panel's BUSY
@@ -13,14 +14,45 @@ import (
 // idleKnobs selects how many of the steps below apply (diagnostic builds
 // measure them one by one); the reboot after the wait undoes all of them,
 // and idleExit does when the wait ends without one.
-var idleKnobs = 4
+var idleKnobs = 5
 
 const (
 	knobUSBPLL   = 1 // clk_usb, clk_adc, clk_hstx and PLL_USB off
 	knobSysDiv   = 2 // clk_sys = clk_ref / 12 (1 MHz)
 	knobROSC     = 3 // ring oscillator off
 	knobSleepGat = 4 // clock-gated sleep: only what wakes the core runs in WFE
+	knobVReg     = 5 // core voltage 1.10 -> idleVSel, brown-out threshold lowered first
 )
+
+// Core voltage while idle. VSEL counts 0.55 V + 50 mV steps (1.10 V = 11);
+// the brown-out detector's VSEL counts 0.473 V + 43 mV steps and defaults
+// to ~0.946 V (11), above the idle voltage, so it moves to ~0.817 V (8)
+// first and back last. POWMAN registers only take writes that carry the
+// password in their upper half.
+const (
+	powmanPassword = 0x5AFE << 16
+	idleVSel       = 7 // 0.90 V
+	idleBODVSel    = 8 // ~0.817 V
+)
+
+var savedVReg, savedBOD uint32
+
+func powmanSet(r *volatile.Register32, v uint32) { r.Set(powmanPassword | v&0xffff) }
+
+// vregSettle waits for a VSEL change to be taken, as pico-sdk does, and
+// for rising, a further vregRiseTime for the output to get there.
+func vregSettle(rising bool) {
+	for rp.POWMAN.VREG.HasBits(rp.POWMAN_VREG_UPDATE_IN_PROGRESS) {
+	}
+	if rising {
+		// TIMER0 counts microseconds whatever clk_sys runs at.
+		start := rp.TIMER0.TIMERAWL.Get()
+		for rp.TIMER0.TIMERAWL.Get()-start < vregRiseTime {
+		}
+	}
+}
+
+const vregRiseTime = 1000 // µs
 
 // idleSysDiv divides clk_ref (12 MHz) down for clk_sys while idle. TIMER0
 // counts TICKS from clk_ref, so time keeping is unaffected; clk_peri follows
@@ -64,6 +96,16 @@ func idleDeep() {
 		return
 	}
 	mask := interrupt.Disable()
+	// POWMAN reads as zero once clk_sys is divided below clk_ref or the ROSC
+	// is off, so the voltage moves first on the way in and last on the way
+	// out.
+	if idleKnobs >= knobVReg {
+		savedVReg, savedBOD = rp.POWMAN.VREG.Get(), rp.POWMAN.BOD.Get()
+		powmanSet(&rp.POWMAN.BOD, savedBOD&^rp.POWMAN_BOD_VSEL_Msk|idleBODVSel<<rp.POWMAN_BOD_VSEL_Pos)
+		rp.POWMAN.VREG_CTRL.Set(powmanPassword | rp.POWMAN.VREG_CTRL.Get()&0xffff | rp.POWMAN_VREG_CTRL_UNLOCK)
+		powmanSet(&rp.POWMAN.VREG, savedVReg&^(rp.POWMAN_VREG_VSEL_Msk|rp.POWMAN_VREG_UPDATE_IN_PROGRESS)|idleVSel<<rp.POWMAN_VREG_VSEL_Pos)
+		vregSettle(false)
+	}
 	if idleKnobs >= knobUSBPLL {
 		rp.CLOCKS.CLK_USB_CTRL.ClearBits(auxClocks)
 		rp.CLOCKS.CLK_ADC_CTRL.ClearBits(auxClocks)
@@ -113,6 +155,12 @@ func idleExit() {
 		rp.CLOCKS.CLK_USB_CTRL.SetBits(auxClocks)
 		rp.CLOCKS.CLK_ADC_CTRL.SetBits(auxClocks)
 		rp.CLOCKS.CLK_HSTX_CTRL.SetBits(auxClocks)
+	}
+	if idleKnobs >= knobVReg {
+		// Full voltage before clockFast starts PLL_SYS.
+		powmanSet(&rp.POWMAN.VREG, savedVReg&^rp.POWMAN_VREG_UPDATE_IN_PROGRESS)
+		vregSettle(true)
+		powmanSet(&rp.POWMAN.BOD, savedBOD)
 	}
 	idleDeepOn = false
 	interrupt.Restore(mask)
