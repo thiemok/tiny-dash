@@ -154,6 +154,7 @@ func main() {
 	common.BusyWaitIdle = func(idle bool) {
 		if idle {
 			clockSlow()
+			idleDeep()
 		} else {
 			clockFast()
 		}
@@ -347,6 +348,7 @@ func main() {
 			link.wifiOff()
 			// The reboot restores the clocks.
 			clockSlow()
+			idleDeep()
 			logger.LogAttrs(ctx, slog.LevelInfo, "dozing until reboot", slog.Duration("lead", lead), slog.Duration("wake", wake))
 			pressed := waitForFetch(logger, sched, buttons, led, lead)
 			var shownAge time.Duration

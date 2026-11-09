@@ -35,6 +35,7 @@ func clockFast() {
 	if !clockIsSlow {
 		return
 	}
+	idleExit()
 	mask := interrupt.Disable()
 	// The PLL keeps its dividers through power-down.
 	rp.PLL_SYS.PWR.ClearBits(rp.PLL_SYS_PWR_PD | rp.PLL_SYS_PWR_VCOPD)
