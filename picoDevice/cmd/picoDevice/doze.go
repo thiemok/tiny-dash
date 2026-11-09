@@ -15,8 +15,7 @@ import (
 // and dozing in PM2 it still draws ~32 mA, the board without it ~12 mA. A
 // second cyw43439 Init after a power cycle fails (SPI test afff0fff), so the
 // device reboots instead of reconnecting, through the boot path that always
-// works. The watchdog scratch registers, which survive a watchdog reset,
-// carry what the next boot needs.
+// works. POWMAN's scratch registers carry what the next boot needs.
 
 const (
 	// wakeLead is how long before the next fetch is due the device reboots
@@ -46,7 +45,10 @@ const (
 	maxChannel      = 14
 )
 
-// carry is the state handed from one boot to the next.
+// carry is the state handed from one boot to the next, through a watchdog
+// reboot or a wake from deep sleep. It lives in POWMAN's scratch registers,
+// which survive both (the watchdog's do not survive P1.7); a reset by RUN or
+// power-on clears them.
 type carry struct {
 	valid   bool
 	pressed bool
@@ -55,29 +57,72 @@ type carry struct {
 	etag    [refresh.ETagLen]byte
 	// shownAge is how long ago the image on the panel was drawn.
 	shownAge time.Duration
+	// sinceResponse is how long ago the previous boot's last response came
+	// in, if hasResponse; button presses wait for pressMinGap after it.
+	sinceResponse time.Duration
+	hasResponse   bool
+	// fromSleep is set after a wake from deep sleep.
+	fromSleep bool
+	// aonMillis is the always-on timer when the carry was stored, and
+	// wallMillis the wall clock then, if hasWall (it was synced); both
+	// truncated to 32 bits. They calibrate the timer, see calibrateAON.
+	aonMillis  uint32
+	wallMillis uint32
+	hasWall    bool
 }
+
+// carryAON marks SCRATCH4 (the always-on timer's milliseconds when the state
+// was stored) and SCRATCH5 (its milliseconds at the last response) as set,
+// carryWall SCRATCH6 (the wall clock's Unix milliseconds then).
+const (
+	carryAON  = 1 << 2
+	carryWall = 1 << 3
+)
 
 // loadCarry reads and clears what the previous boot left.
 func loadCarry() (c carry) {
-	s0 := rp.WATCHDOG.SCRATCH0.Get()
-	rp.WATCHDOG.SCRATCH0.Set(0)
+	pm := rp.POWMAN
+	loadAONCal()
+	s0 := pm.SCRATCH0.Get()
+	pm.SCRATCH0.Set(0)
+	fromSleep, byButton := wokeFromSleep()
+	if fromSleep {
+		disableWakeups()
+	}
 	if s0&carryMagicMask != carryMagic {
 		return c
 	}
 	c.valid = true
-	c.pressed = s0&carryPressed != 0
+	c.fromSleep = fromSleep
+	c.pressed = s0&carryPressed != 0 || byButton
 	c.hasETag = s0&carryETag != 0
 	c.channel = uint8(s0 & carryChannelMsk >> carryChannelPos)
 	var raw [refresh.ETagLen / 2]byte
-	binary.LittleEndian.PutUint32(raw[0:], rp.WATCHDOG.SCRATCH1.Get())
-	binary.LittleEndian.PutUint32(raw[4:], rp.WATCHDOG.SCRATCH2.Get())
+	binary.LittleEndian.PutUint32(raw[0:], pm.SCRATCH1.Get())
+	binary.LittleEndian.PutUint32(raw[4:], pm.SCRATCH2.Get())
 	hex.Encode(c.etag[:], raw[:])
-	c.shownAge = time.Duration(rp.WATCHDOG.SCRATCH3.Get()) * time.Second
+	c.shownAge = time.Duration(pm.SCRATCH3.Get()) * time.Second
+	if s0&carryAON != 0 {
+		// 32 bits of milliseconds wrap after 49 days; differences do not.
+		now := uint32(aonMillis())
+		c.aonMillis = pm.SCRATCH4.Get()
+		// Asleep the timer runs fast; aonPPM is loaded by now.
+		c.shownAge += aonToReal(time.Duration(now-c.aonMillis) * time.Millisecond)
+		c.sinceResponse = aonToReal(time.Duration(now-pm.SCRATCH5.Get()) * time.Millisecond)
+		c.hasResponse = true
+		if s0&carryWall != 0 {
+			c.wallMillis, c.hasWall = pm.SCRATCH6.Get(), true
+		}
+	}
 	return c
 }
 
-// rebootWith stores the state for the next boot and resets the device.
-func rebootWith(etagSlot []byte, pressed bool, shownAge time.Duration, channel uint8) {
+// storeCarry writes the state for the next boot. aonResponse is the always-on
+// timer's milliseconds at the last response, ignored unless withAON; it then
+// also records the timer now, so the next boot can add the time in between
+// to shownAge.
+func storeCarry(etagSlot []byte, pressed bool, shownAge time.Duration, channel uint8, withAON bool, aonResponse uint32, wall time.Time, wallSynced bool) {
+	pm := rp.POWMAN
 	s0 := uint32(carryMagic)
 	if channel <= maxChannel {
 		s0 |= uint32(channel) << carryChannelPos
@@ -89,10 +134,26 @@ func rebootWith(etagSlot []byte, pressed bool, shownAge time.Duration, channel u
 	if pressed {
 		s0 |= carryPressed
 	}
-	rp.WATCHDOG.SCRATCH1.Set(binary.LittleEndian.Uint32(raw[0:]))
-	rp.WATCHDOG.SCRATCH2.Set(binary.LittleEndian.Uint32(raw[4:]))
-	rp.WATCHDOG.SCRATCH3.Set(uint32(shownAge / time.Second))
-	rp.WATCHDOG.SCRATCH0.Set(s0)
+	if withAON {
+		s0 |= carryAON
+		pm.SCRATCH4.Set(uint32(aonMillis()))
+		pm.SCRATCH5.Set(aonResponse)
+		if wallSynced {
+			s0 |= carryWall
+			pm.SCRATCH6.Set(uint32(wall.UnixMilli()))
+		}
+	}
+	pm.SCRATCH1.Set(binary.LittleEndian.Uint32(raw[0:]))
+	pm.SCRATCH2.Set(binary.LittleEndian.Uint32(raw[4:]))
+	pm.SCRATCH3.Set(uint32(shownAge / time.Second))
+	pm.SCRATCH0.Set(s0)
+}
+
+// rebootWith stores the state for the next boot and resets the device.
+func rebootWith(etagSlot []byte, pressed bool, shownAge time.Duration, channel uint8) {
+	// POWMAN reads and writes nothing while idleDeep is in effect.
+	idleExit()
+	storeCarry(etagSlot, pressed, shownAge, channel, false, 0, time.Time{}, false)
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 1})
 	machine.Watchdog.Start()
 	for {

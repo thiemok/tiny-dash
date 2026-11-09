@@ -229,6 +229,18 @@ func main() {
 	if carried.pressed && led != nil {
 		led.On()
 	}
+	if carried.pressed && carried.hasResponse && carried.sinceResponse < pressMinGap {
+		// A press right after a fetch: the previous boot's schedule would
+		// have held it until pressMinGap after that fetch.
+		wait := pressMinGap - carried.sinceResponse
+		logger.LogAttrs(ctx, slog.LevelInfo, "refresh press held back", slog.Duration("for", wait))
+		clockSlow()
+		idleDeep()
+		time.Sleep(wait)
+		clockFast()
+		// The hold is not part of the wake that the next lead repeats.
+		bootStart = bootStart.Add(wait)
+	}
 	for cycle := 1; ; cycle++ {
 		if !lastShown.IsZero() && time.Since(lastShown) >= maxImageAge {
 			f.forgetImage()
@@ -342,15 +354,42 @@ func main() {
 		var wake time.Duration
 		if carried.valid && cycle == 1 && ok {
 			wake = f.respondedAt.Sub(bootStart)
+			if now, synced := clock.Now(); synced {
+				if measured, cal := calibrateAON(carried, now); cal {
+					logger.LogAttrs(ctx, slog.LevelInfo, "always-on timer calibrated",
+						slog.Int("measuredPPM", int(measured)), slog.Int("ppm", int(aonPPM)))
+				}
+			}
 		}
 		lead := leadFor(wake)
 		if link.off || ok && time.Until(sched.Next()) >= lead+minDoze {
 			link.wifiOff()
+			pressed := takePress(logger, sched, buttons, led)
+			if sleepFor := time.Until(sched.Next()) - lead; !pressed && !debugBuild && sleepFor >= minDeepSleep {
+				var shownAge time.Duration
+				if !lastShown.IsZero() {
+					shownAge = time.Since(lastShown)
+				}
+				aonStart()
+				// With no response this boot, a press may fetch at once.
+				sinceResponse := pressMinGap
+				if ok {
+					sinceResponse = time.Since(f.respondedAt)
+				}
+				aonResponse := uint32(aonMillis()) - uint32(sinceResponse/time.Millisecond)
+				wallNow, wallSynced := clock.Now()
+				storeCarry(f.etagSlot, false, shownAge, link.channel, true, aonResponse, wallNow, wallSynced)
+				logger.LogAttrs(ctx, slog.LevelInfo, "deep sleep until the next fetch", slog.Duration("for", sleepFor),
+					slog.Duration("lead", lead), slog.Duration("wake", wake))
+				logDrainer.Flush(logFlushTimeout)
+				refused := deepSleep(sleepFor)
+				logger.LogAttrs(ctx, slog.LevelWarn, "deep sleep refused; dozing instead", slog.String("reason", refused))
+			}
 			// The reboot restores the clocks.
 			clockSlow()
 			idleDeep()
 			logger.LogAttrs(ctx, slog.LevelInfo, "dozing until reboot", slog.Duration("lead", lead), slog.Duration("wake", wake))
-			pressed := waitForFetch(logger, sched, buttons, led, lead)
+			pressed = waitForFetch(logger, sched, buttons, led, lead) || pressed
 			var shownAge time.Duration
 			if !lastShown.IsZero() {
 				shownAge = time.Since(lastShown)
@@ -425,6 +464,26 @@ func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.
 		}
 		time.Sleep(min(remaining, buttonPollTime))
 	}
+}
+
+// takePress handles a refresh press latched during the fetch or the panel
+// refresh, as waitForFetch would, so it is not lost to a deep sleep (the
+// sleep's own button wake-up only sees the button while it is held).
+func takePress(logger *slog.Logger, sched *refresh.Schedule, buttons *common.ButtonController, led *common.LEDController) bool {
+	if buttons == nil {
+		return false
+	}
+	buttons.Poll()
+	if !buttons.WasPressed(refreshButton) {
+		return false
+	}
+	if led != nil {
+		led.On()
+	}
+	due := sched.Press(time.Now())
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "button pressed", slog.String("button", buttonNames[refreshButton:refreshButton+1]),
+		slog.String("action", "refresh"), slog.Duration("in", time.Until(due)))
+	return true
 }
 
 // flushLogOnPanic routes a panic in main through the log ring before letting
