@@ -15,7 +15,6 @@ import (
 	"github.com/thiemok/tiny-dash/netkit/pkg/wallclock"
 	"github.com/thiemok/tiny-dash/tinytls"
 	"github.com/thiemok/tiny-dash/tinytls/drbg"
-	"github.com/thiemok/tiny-dash/tinytls/roots"
 	util "github.com/thiemok/tiny-dash/util/pkg"
 )
 
@@ -129,7 +128,7 @@ func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock
 		slog.Duration("took", seed.took), slog.Duration("waited", time.Since(start)),
 		slog.Int("healthFailures", t.trng.healthFailures), slog.Int("timeouts", t.trng.timeouts))
 
-	t.chain = roots.ISRG()
+	t.chain = trustRoots()
 	vcfg := x509.VerifierConfig{
 		Roots:              &t.chain,
 		Nanotime:           clock.Nanotime,
