@@ -24,6 +24,9 @@ type E673Display struct {
 	// Optional features
 	buttons *common.ButtonController
 	led     *common.LEDController
+	// asleep is set once the controller is in deep sleep; only init (a
+	// reset) wakes it.
+	asleep bool
 }
 
 // New creates and initializes an Inky Impression 7.3" Spectra 6 display (E673)
@@ -52,10 +55,12 @@ func New(config common.InkyConfig) (*E673Display, error) {
 	config.DC.Set(false) // DC default low
 	config.RST.Set(true) // RST idle high
 
-	// Perform hardware initialization
+	// Perform hardware initialization, which also checks the panel answers,
+	// then put the controller to sleep until Update needs it.
 	if err := display.init(); err != nil {
 		return nil, fmt.Errorf("display initialization failed: %w", err)
 	}
+	display.sleep()
 
 	// Initialize optional features (buttons and LED) if available
 	if len(config.ButtonPins) > 0 {
@@ -82,6 +87,7 @@ func New(config common.InkyConfig) (*E673Display, error) {
 func (d *E673Display) init() error {
 	// Hardware reset
 	common.Reset(d.config.RST)
+	d.asleep = false
 
 	// Wait for display to be ready
 	if !common.BusyWait(d.config.BUSY, 5) {
@@ -138,6 +144,8 @@ func (d *E673Display) sendCommand(command byte, data []byte) {
 var (
 	updateBTST2 = []byte{0x6F, 0x1F, 0x17, 0x49}
 	zeroByte    = []byte{0x00}
+	// deepSleepCheck is DSLP's required check code.
+	deepSleepCheck = []byte{0xA5}
 
 	errPowerOnTimeout  = errors.New("timeout waiting for power on")
 	errRefreshTimeout  = errors.New("timeout waiting for display refresh")
@@ -147,6 +155,13 @@ var (
 // Update transfers the framebuffer to the display and triggers a refresh
 // This takes approximately 32 seconds to complete for the E673
 func (d *E673Display) Update() error {
+	// Only a reset wakes the controller from deep sleep.
+	if d.asleep {
+		if err := d.init(); err != nil {
+			return err
+		}
+	}
+
 	// Power on
 	d.sendCommand(phat.CmdPON, nil)
 	if !common.BusyWait(d.config.BUSY, 1) {
@@ -174,8 +189,17 @@ func (d *E673Display) Update() error {
 	if !common.BusyWait(d.config.BUSY, 1) {
 		return errPowerOffTimeout
 	}
+	d.sleep()
 
 	return nil
+}
+
+// sleep puts the controller into deep sleep. After power off it otherwise
+// stays in standby, its oscillator and logic running, until the next reset.
+// The image stays on the panel either way.
+func (d *E673Display) sleep() {
+	d.sendCommand(phat.CmdDSLP, deepSleepCheck)
+	d.asleep = true
 }
 
 // Fill fills the framebuffer with a single color
