@@ -34,15 +34,16 @@ const (
 	// leaveTime lets the deauthentication frame go out before power-off.
 	leaveTime = 50 * time.Millisecond
 
-	carryMagic     = 0x7d5b0000
-	carryMagicMask = 0xffff0000
-	carryETag      = 1 << 0
-	carryPressed   = 1 << 1
-	// The network's channel, see wifiLink.channel, sits in SCRATCH0's bits
-	// 8-11.
-	carryChannelPos = 8
-	carryChannelMsk = 0xf << carryChannelPos
-	maxChannel      = 14
+	carryMagic       = 0x7d5b0000
+	carryMagicMask   = 0xffff0000
+	carryETag        = 1 << 0
+	carryPressed     = 1 << 1
+	carryFailuresPos = 4
+	carryFailuresMsk = 0xf << carryFailuresPos
+	carryChannelPos  = 8
+	carryChannelMsk  = 0xf << carryChannelPos
+	maxFailures      = carryFailuresMsk >> carryFailuresPos
+	maxChannel       = 14
 )
 
 // carry is the state handed from one boot to the next, through a watchdog
@@ -50,11 +51,12 @@ const (
 // which survive both (the watchdog's do not survive P1.7); a reset by RUN or
 // power-on clears them.
 type carry struct {
-	valid   bool
-	pressed bool
-	hasETag bool
-	channel uint8
-	etag    [refresh.ETagLen]byte
+	valid    bool
+	pressed  bool
+	hasETag  bool
+	channel  uint8
+	failures uint
+	etag     [refresh.ETagLen]byte
 	// shownAge is how long ago the image on the panel was drawn.
 	shownAge time.Duration
 	// sinceResponse is how long ago the previous boot's last response came
@@ -97,6 +99,7 @@ func loadCarry() (c carry) {
 	c.pressed = s0&carryPressed != 0 || byButton
 	c.hasETag = s0&carryETag != 0
 	c.channel = uint8(s0 & carryChannelMsk >> carryChannelPos)
+	c.failures = uint(s0 & carryFailuresMsk >> carryFailuresPos)
 	var raw [refresh.ETagLen / 2]byte
 	binary.LittleEndian.PutUint32(raw[0:], pm.SCRATCH1.Get())
 	binary.LittleEndian.PutUint32(raw[4:], pm.SCRATCH2.Get())
@@ -117,43 +120,55 @@ func loadCarry() (c carry) {
 	return c
 }
 
-// storeCarry writes the state for the next boot. aonResponse is the always-on
-// timer's milliseconds at the last response, ignored unless withAON; it then
-// also records the timer now, so the next boot can add the time in between
-// to shownAge.
-func storeCarry(etagSlot []byte, pressed bool, shownAge time.Duration, channel uint8, withAON bool, aonResponse uint32, wall time.Time, wallSynced bool) {
+type handoff struct {
+	etagSlot []byte
+	pressed  bool
+	shownAge time.Duration
+	channel  uint8
+	failures uint
+}
+
+// aonStamp lets the boot after a deep sleep add the time asleep to shownAge,
+// hold back an early press (aonResponse is the always-on timer at the last
+// response) and, when wallSynced, calibrate the timer against wall.
+type aonStamp struct {
+	aonResponse uint32
+	wall        time.Time
+	wallSynced  bool
+}
+
+func storeCarry(h handoff, stamp *aonStamp) {
 	pm := rp.POWMAN
-	s0 := uint32(carryMagic)
-	if channel <= maxChannel {
-		s0 |= uint32(channel) << carryChannelPos
+	s0 := uint32(carryMagic) | uint32(min(h.failures, maxFailures))<<carryFailuresPos
+	if h.channel <= maxChannel {
+		s0 |= uint32(h.channel) << carryChannelPos
 	}
 	var raw [refresh.ETagLen / 2]byte
-	if _, err := hex.Decode(raw[:], etagSlot); err == nil {
+	if _, err := hex.Decode(raw[:], h.etagSlot); err == nil {
 		s0 |= carryETag
 	}
-	if pressed {
+	if h.pressed {
 		s0 |= carryPressed
 	}
-	if withAON {
+	if stamp != nil {
 		s0 |= carryAON
 		pm.SCRATCH4.Set(uint32(aonMillis()))
-		pm.SCRATCH5.Set(aonResponse)
-		if wallSynced {
+		pm.SCRATCH5.Set(stamp.aonResponse)
+		if stamp.wallSynced {
 			s0 |= carryWall
-			pm.SCRATCH6.Set(uint32(wall.UnixMilli()))
+			pm.SCRATCH6.Set(uint32(stamp.wall.UnixMilli()))
 		}
 	}
 	pm.SCRATCH1.Set(binary.LittleEndian.Uint32(raw[0:]))
 	pm.SCRATCH2.Set(binary.LittleEndian.Uint32(raw[4:]))
-	pm.SCRATCH3.Set(uint32(shownAge / time.Second))
+	pm.SCRATCH3.Set(uint32(h.shownAge / time.Second))
 	pm.SCRATCH0.Set(s0)
 }
 
-// rebootWith stores the state for the next boot and resets the device.
-func rebootWith(etagSlot []byte, pressed bool, shownAge time.Duration, channel uint8) {
+func rebootWith(h handoff) {
 	// POWMAN reads and writes nothing while idleDeep is in effect.
 	idleExit()
-	storeCarry(etagSlot, pressed, shownAge, channel, false, 0, time.Time{}, false)
+	storeCarry(h, nil)
 	machine.Watchdog.Configure(machine.WatchdogConfig{TimeoutMillis: 1})
 	machine.Watchdog.Start()
 	for {

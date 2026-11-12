@@ -203,3 +203,20 @@ func TestParseETag(t *testing.T) {
 		t.Fatalf("len(NoETag) = %d, want %d", len(NoETag), ETagLen)
 	}
 }
+
+func TestRestoreFailuresContinuesBackoff(t *testing.T) {
+	s := New(Policy{Default: time.Minute, Retry: backoff.Exponential{Min: 30 * time.Second, Max: 10 * time.Minute}})
+	s.RestoreFailures(2)
+	now := time.Unix(1_000_000, 0)
+	base := 30 * time.Second << 2
+	if got, want := s.Failed(now, 0), base/2; got != want {
+		t.Fatalf("Failed after RestoreFailures(2) = %v, want %v", got, want)
+	}
+	if got := s.Failures(); got != 3 {
+		t.Fatalf("Failures = %d, want 3", got)
+	}
+	s.Succeeded(now, 0, false)
+	if got := s.Failures(); got != 0 {
+		t.Fatalf("Failures after success = %d, want 0", got)
+	}
+}

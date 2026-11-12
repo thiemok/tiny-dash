@@ -207,6 +207,7 @@ func main() {
 		PressMin: pressMinGap,
 		Retry:    backoff.Exponential{Min: retryMin, Max: retryMax},
 	})
+	sched.RestoreFailures(carried.failures)
 	ctx := context.Background()
 	var prev, cur runtime.MemStats
 
@@ -219,17 +220,18 @@ func main() {
 	} else {
 		logger.Info("Starting dashboard image fetch loop...", "uri", requestURI, "host", apiURL.HostHeader(), "dns", !f.resolver.IsStatic(), "expectedBytes", len(f.framebuf))
 	}
-	fetchFailures := 0
+	failuresSinceReconnect := 0
 	var lastShown time.Time
 	if carried.valid && carried.hasETag && !carried.pressed {
 		// The panel still shows the previous boot's image.
 		copy(f.etagSlot, carried.etag[:])
 		lastShown = time.Now().Add(-carried.shownAge)
 	}
-	if carried.pressed && led != nil {
+	forcedRefreshPending := carried.pressed
+	if forcedRefreshPending && led != nil {
 		led.On()
 	}
-	if carried.pressed && carried.hasResponse && carried.sinceResponse < pressMinGap {
+	if forcedRefreshPending && carried.hasResponse && carried.sinceResponse < pressMinGap {
 		// A press right after a fetch: the previous boot's schedule would
 		// have held it until pressMinGap after that fetch.
 		wait := pressMinGap - carried.sinceResponse
@@ -245,16 +247,16 @@ func main() {
 		if !lastShown.IsZero() && time.Since(lastShown) >= maxImageAge {
 			f.forgetImage()
 		}
-		if !link.up() || fetchFailures >= maxFetchFailures {
+		if !link.up() || failuresSinceReconnect >= maxFetchFailures {
 			// The display keeps showing the last image while offline.
 			logger.LogAttrs(ctx, slog.LevelWarn, "wifi link lost; reconnecting",
-				slog.Bool("linkUp", link.up()), slog.Int("fetchFailures", fetchFailures))
+				slog.Bool("linkUp", link.up()), slog.Int("fetchFailures", failuresSinceReconnect))
 			link.connect()
 			// The new lease may come with another DNS server or another view
 			// of the network, e.g. after moving to a different access point.
 			f.resolver.Invalidate()
 			ntpSync.invalidate()
-			fetchFailures = 0
+			failuresSinceReconnect = 0
 			if debugBuild {
 				// connect logs its own allocations; keep them out of the cycle's.
 				runtime.ReadMemStats(&prev)
@@ -272,9 +274,9 @@ func main() {
 		stage, err := f.fetchRetrying()
 		switch {
 		case err == nil:
-			fetchFailures = 0
+			failuresSinceReconnect = 0
 		case isNetworkFailure(err):
-			fetchFailures++
+			failuresSinceReconnect++
 		}
 		ok := err == nil
 		switch {
@@ -285,7 +287,7 @@ func main() {
 			// Only a complete image is ever shown: a failed fetch leaves
 			// framebuf partly written, or holding the TLS handshake's scratch.
 			ok = false
-			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err), slog.Int("failures", fetchFailures))
+			logger.LogAttrs(ctx, slog.LevelError, "image fetch failed", slog.String("stage", stage), slog.Any("error", err), slog.Int("failures", failuresSinceReconnect))
 		default:
 			// The redraw needs no network: power WiFi off for it and the
 			// wait after it.
@@ -302,8 +304,8 @@ func main() {
 			lastShown = time.Now()
 			logger.LogAttrs(ctx, slog.LevelInfo, "display updated successfully", slog.Int("bytesReceived", len(f.framebuf)),
 				slog.Duration("handshake", f.handshakeTook()), slog.Duration("body", f.bodyTook), slog.Bool("etag", f.etagOK))
+			forcedRefreshPending = false
 			if led != nil {
-				// A forced refresh is on the panel.
 				led.Off()
 			}
 		}
@@ -336,7 +338,7 @@ func main() {
 		if debugBuild && cycle == wifiTestOutageAfterCycle {
 			link.simulateOutage(wifiTestOutageFailJoins)
 		}
-		if fetchFailures >= maxFetchFailures {
+		if failuresSinceReconnect >= maxFetchFailures {
 			// Reconnect at once; the wait would only delay it.
 			continue
 		}
@@ -362,23 +364,26 @@ func main() {
 			}
 		}
 		lead := leadFor(wake)
-		if link.off || ok && time.Until(sched.Next()) >= lead+minDoze {
+		if link.off || time.Until(sched.Next()) >= lead+minDoze {
 			link.wifiOff()
 			pressed := takePress(logger, sched, buttons, led)
+			next := handoff{etagSlot: f.etagSlot, pressed: forcedRefreshPending, channel: link.channel, failures: sched.Failures()}
 			if sleepFor := time.Until(sched.Next()) - lead; !pressed && !debugBuild && sleepFor >= minDeepSleep {
-				var shownAge time.Duration
-				if !lastShown.IsZero() {
-					shownAge = time.Since(lastShown)
-				}
 				aonStart()
 				// With no response this boot, a press may fetch at once.
 				sinceResponse := pressMinGap
 				if ok {
 					sinceResponse = time.Since(f.respondedAt)
 				}
-				aonResponse := uint32(aonMillis()) - uint32(sinceResponse/time.Millisecond)
-				wallNow, wallSynced := clock.Now()
-				storeCarry(f.etagSlot, false, shownAge, link.channel, true, aonResponse, wallNow, wallSynced)
+				next.shownAge = shownAgeOf(lastShown)
+				stamp := aonStamp{aonResponse: uint32(aonMillis()) - uint32(sinceResponse/time.Millisecond)}
+				stamp.wall, stamp.wallSynced = clock.Now()
+				storeCarry(next, &stamp)
+				if led != nil {
+					// The pads hold their level through the sleep; a
+					// pending forced refresh lights it again on the wake.
+					led.Off()
+				}
 				logger.LogAttrs(ctx, slog.LevelInfo, "deep sleep until the next fetch", slog.Duration("for", sleepFor),
 					slog.Duration("lead", lead), slog.Duration("wake", wake))
 				logDrainer.Flush(logFlushTimeout)
@@ -389,21 +394,19 @@ func main() {
 			clockSlow()
 			idleDeep()
 			logger.LogAttrs(ctx, slog.LevelInfo, "dozing until reboot", slog.Duration("lead", lead), slog.Duration("wake", wake))
-			pressed = waitForFetch(logger, sched, buttons, led, lead) || pressed
-			var shownAge time.Duration
-			if !lastShown.IsZero() {
-				shownAge = time.Since(lastShown)
-			}
+			next.pressed = waitForFetch(logger, sched, buttons, led, lead) || pressed || forcedRefreshPending
+			next.shownAge = shownAgeOf(lastShown)
 			if uartLog {
 				// The UART baud rate follows clk_sys.
 				clockFast()
 			}
 			logDrainer.Flush(logFlushTimeout)
-			rebootWith(f.etagSlot, pressed, shownAge, link.channel)
+			rebootWith(next)
 		}
 		if waitForFetch(logger, sched, buttons, led, 0) {
 			// A press asks for the image even if it is unchanged.
 			f.forgetImage()
+			forcedRefreshPending = true
 		}
 	}
 }
@@ -464,6 +467,13 @@ func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.
 		}
 		time.Sleep(min(remaining, buttonPollTime))
 	}
+}
+
+func shownAgeOf(shown time.Time) time.Duration {
+	if shown.IsZero() {
+		return 0
+	}
+	return time.Since(shown)
 }
 
 // takePress handles a refresh press latched during the fetch or the panel

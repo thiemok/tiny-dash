@@ -86,3 +86,14 @@ func TestNextDoesNotAllocate(t *testing.T) {
 		t.Errorf("Next allocates %v times per call", allocs)
 	}
 }
+
+func TestRestore(t *testing.T) {
+	e := Exponential{Min: time.Second, Max: time.Minute}
+	e.Restore(3)
+	if got := e.Attempts(); got != 3 {
+		t.Fatalf("Attempts = %d, want 3", got)
+	}
+	if got := e.Next(math.MaxUint32); got < 8*time.Second-time.Millisecond || got >= 8*time.Second {
+		t.Errorf("Next after Restore(3) = %v, want just below 8s", got)
+	}
+}
