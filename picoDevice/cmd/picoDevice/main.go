@@ -150,6 +150,10 @@ func main() {
 	dnsFallback := parseDNSServer(logger)
 	display, requestURI := initDisplay(logger, apiURL)
 	buttons, led := initButtons(logger, display)
+	// Before the WiFi join, so D only has to be held while the device wakes.
+	if carried.wokeByButton {
+		enterBootloaderIfHeld(logger, buttons, led)
+	}
 	common.BulkWrite = panelBulkWrite
 	common.BusyWaitIdle = func(idle bool) {
 		if idle {
@@ -456,6 +460,7 @@ func waitForFetch(logger *slog.Logger, sched *refresh.Schedule, buttons *common.
 					logger.LogAttrs(context.Background(), slog.LevelInfo, "button pressed", slog.String("button", name))
 					continue
 				}
+				enterBootloaderIfHeld(logger, buttons, led)
 				pressed = true
 				if led != nil {
 					led.On()
@@ -487,6 +492,7 @@ func takePress(logger *slog.Logger, sched *refresh.Schedule, buttons *common.But
 	if !buttons.WasPressed(refreshButton) {
 		return false
 	}
+	enterBootloaderIfHeld(logger, buttons, led)
 	if led != nil {
 		led.On()
 	}

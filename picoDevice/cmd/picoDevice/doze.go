@@ -63,8 +63,8 @@ type carry struct {
 	// in, if hasResponse; button presses wait for pressMinGap after it.
 	sinceResponse time.Duration
 	hasResponse   bool
-	// fromSleep is set after a wake from deep sleep.
-	fromSleep bool
+	fromSleep     bool
+	wokeByButton  bool
 	// aonMillis is the always-on timer when the carry was stored, and
 	// wallMillis the wall clock then, if hasWall (it was synced); both
 	// truncated to 32 bits. They calibrate the timer, see calibrateAON.
@@ -86,11 +86,12 @@ func loadCarry() (c carry) {
 	pm := rp.POWMAN
 	loadAONCal()
 	s0 := pm.SCRATCH0.Get()
-	pm.SCRATCH0.Set(0)
+	clearCarry()
 	fromSleep, byButton := wokeFromSleep()
 	if fromSleep {
 		disableWakeups()
 	}
+	c.wokeByButton = byButton
 	if s0&carryMagicMask != carryMagic {
 		return c
 	}
@@ -136,6 +137,9 @@ type aonStamp struct {
 	wall        time.Time
 	wallSynced  bool
 }
+
+// clearCarry makes the next boot a cold one.
+func clearCarry() { rp.POWMAN.SCRATCH0.Set(0) }
 
 func storeCarry(h handoff, stamp *aonStamp) {
 	pm := rp.POWMAN
