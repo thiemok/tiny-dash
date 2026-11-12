@@ -34,6 +34,10 @@ func (e *Exponential) Next(rnd uint32) time.Duration {
 // Reset starts the next Next sequence at Min again, e.g. after a success.
 func (e *Exponential) Reset() { e.attempts = 0 }
 
+// Restore sets the attempt count, e.g. to carry it across a reboot, so the
+// next delay continues the sequence instead of starting over at Min.
+func (e *Exponential) Restore(attempts uint) { e.attempts = attempts }
+
 // Attempts reports how many delays Next has returned since the last Reset.
 func (e *Exponential) Attempts() uint { return e.attempts }
 

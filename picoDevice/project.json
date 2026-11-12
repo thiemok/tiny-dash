@@ -20,6 +20,12 @@
       "configurations": {
         "debug": {
           "env": { "PICO_BUILD_TAGS": "picodebug" }
+        },
+        "uart": {
+          "env": { "PICO_BUILD_TAGS": "uartlog" }
+        },
+        "debug-uart": {
+          "env": { "PICO_BUILD_TAGS": "picodebug,uartlog" }
         }
       },
       "dependsOn": ["configure"],
@@ -41,6 +47,12 @@
       "configurations": {
         "debug": {
           "env": { "PICO_BUILD_TAGS": "picodebug" }
+        },
+        "uart": {
+          "env": { "PICO_BUILD_TAGS": "uartlog" }
+        },
+        "debug-uart": {
+          "env": { "PICO_BUILD_TAGS": "picodebug,uartlog" }
         }
       },
       "dependsOn": ["configure"]

@@ -1,0 +1,12 @@
+{
+  "name": "third_party/cyw43439",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "targets": {
+    "generate": {
+      "executor": "nx:noop",
+      "metadata": {
+        "description": "Vendored upstream code: its generated *_string.go files are committed, and regenerating them needs golang.org/x/tools/cmd/stringer."
+      }
+    }
+  }
+}

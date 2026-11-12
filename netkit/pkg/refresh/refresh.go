@@ -91,6 +91,11 @@ func (s *Schedule) Failed(now time.Time, rnd uint32) time.Duration {
 	return d
 }
 
+// RestoreFailures sets how many fetches failed in a row, e.g. after a reboot
+// that interrupted the backoff, so the next retry waits as long as it would
+// have without it.
+func (s *Schedule) RestoreFailures(n uint) { s.policy.Retry.Restore(n) }
+
 // Failures reports how many fetches failed in a row.
 func (s *Schedule) Failures() uint { return s.policy.Retry.Attempts() }
 
