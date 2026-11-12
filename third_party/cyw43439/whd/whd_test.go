@@ -10,7 +10,7 @@ func TestParseAsyncEvent(t *testing.T) {
 	for i := range buf {
 		buf[i] = byte(i)
 	}
-	ev, err := ParseAsyncEvent(binary.LittleEndian, buf[:])
+	ev, err := ParseAsyncEvent(binary.BigEndian, buf[:])
 	if err != nil {
 		t.Fatal(err)
 	}

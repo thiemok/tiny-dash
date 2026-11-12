@@ -37,3 +37,13 @@ A-MPDU settings (without it the download ran ~0.45 s slower) and after
 ~100 ms timeout); `waitForCredit` keeps 10 ms, because polling it faster made
 downloads stall on the data path. With the faster replies the wait after
 `WLC_SET_BAND` had to grow to 200 ms to keep joins from failing.
+
+`whd/whd_test.go`: `TestParseAsyncEvent` parses with `binary.BigEndian`, the
+order `ParseAsyncEvent` documents and its expected values assume; upstream
+passes `binary.LittleEndian` and fails.
+
+## In this repo's Nx workspace
+
+The module is an Nx project like the others, so CI runs its lint and test
+targets. Its `generate` target is a no-op (`project.json`): the generated
+`*_string.go` files are committed, and regenerating them needs `stringer`.
