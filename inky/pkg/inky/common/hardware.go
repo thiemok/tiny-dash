@@ -14,6 +14,11 @@ func Reset(rstPin Pin) {
 	time.Sleep(30 * time.Millisecond)
 }
 
+// BusyWaitIdle, if set, is called with true before BusyWait starts waiting
+// and with false once it stops, so the board can idle more deeply (e.g. slow
+// its clocks) while nothing but the BUSY pin is polled.
+var BusyWaitIdle func(idle bool)
+
 // BusyWait waits for the busy pin to go high (ready state)
 // Returns true if ready, false if timeout
 // This is a common operation used by all display types
@@ -21,6 +26,10 @@ func BusyWait(busyPin Pin, timeoutSeconds int) bool {
 	// If BUSY pin is already high, display is ready
 	if busyPin.Get() {
 		return true
+	}
+	if BusyWaitIdle != nil {
+		BusyWaitIdle(true)
+		defer BusyWaitIdle(false)
 	}
 
 	// Wait for BUSY to go high
@@ -34,6 +43,16 @@ func BusyWait(busyPin Pin, timeoutSeconds int) bool {
 
 	return false // Timeout
 }
+
+// BulkWrite, if set, is called with true before SendCommand writes a data
+// block of at least BulkWriteMin bytes and with false once it is out, so the
+// board can slow its clocks while the CPU only waits for the transfer. It
+// must keep the SPI clock rate unchanged.
+var BulkWrite func(start bool)
+
+// BulkWriteMin is the smallest data block SendCommand reports to BulkWrite;
+// smaller ones are over before a clock switch would pay.
+const BulkWriteMin = 4096
 
 // commandBytes[c] == c. As a string constant it stays in flash rather than
 // RAM; SendCommand views one byte of it as the []byte that SPI.Tx only
@@ -66,7 +85,14 @@ func SendCommand(spi SPI, csPin, dcPin Pin, command byte, data []byte) {
 
 	if data != nil && len(data) > 0 {
 		dcPin.Set(true)
+		bulk := BulkWrite != nil && len(data) >= BulkWriteMin
+		if bulk {
+			BulkWrite(true)
+		}
 		spi.Tx(data, nil)
+		if bulk {
+			BulkWrite(false)
+		}
 	}
 
 	csPin.Set(true)

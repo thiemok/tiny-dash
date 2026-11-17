@@ -15,7 +15,6 @@ import (
 	"github.com/thiemok/tiny-dash/netkit/pkg/wallclock"
 	"github.com/thiemok/tiny-dash/tinytls"
 	"github.com/thiemok/tiny-dash/tinytls/drbg"
-	"github.com/thiemok/tiny-dash/tinytls/roots"
 	util "github.com/thiemok/tiny-dash/util/pkg"
 )
 
@@ -66,38 +65,70 @@ type tlsClient struct {
 	handshakeTook time.Duration
 }
 
-// newTLSClient seeds the DRBG from the TRNG and configures certificate
-// validation against the embedded roots on the wall clock, which reads 0 and
-// so validates nothing until NTP has set it. Without entropy no handshake can
-// be secure, so a TRNG failure halts the device.
-func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock, fb *bufshare.Buffer) *tlsClient {
-	t := &tlsClient{clock: clock}
-	ctx := context.Background()
+// trngSeed collects the DRBG's seed from the TRNG on its own goroutine. A
+// sample takes ~335 ms, and the WiFi join that comes first spends seconds
+// waiting on the radio, so collecting during the join keeps a second of
+// sampling off every wake. read sleeps between polls, so it yields to the
+// join on the cooperative scheduler.
+type trngSeed struct {
+	done   chan struct{}
+	trng   trng
+	blocks [trngSeedBlocks]trngBlock
+	err    error
+	took   time.Duration
+}
+
+func startTRNGSeed(logger *slog.Logger) *trngSeed {
+	s := &trngSeed{done: make(chan struct{})}
+	go s.collect(logger)
+	return s
+}
+
+func (s *trngSeed) collect(logger *slog.Logger) {
+	defer close(s.done)
 	start := time.Now()
-	t.trng.init()
-	for i := range trngSeedBlocks {
+	s.trng.init()
+	for i := range s.blocks {
 		sampleStart := time.Now()
-		err := t.trng.read(&t.sample)
-		if err != nil {
-			logger.LogAttrs(ctx, slog.LevelError, "TRNG broken; halting, as TLS needs its entropy",
-				slog.Any("error", err), slog.Int("healthFailures", t.trng.healthFailures),
-				slog.Int("timeouts", t.trng.timeouts), slog.Duration("timeout", t.trng.timeout))
+		if s.err = s.trng.read(&s.blocks[i]); s.err != nil {
+			return
 		}
-		util.RequireNoError(err, "seeding the TLS DRBG from the TRNG")
 		if debugBuild {
-			tries, fails := t.trng.autocorrStats()
-			logger.LogAttrs(ctx, slog.LevelInfo, "TRNG sample", slog.Int("sample", i),
+			tries, fails := s.trng.autocorrStats()
+			logger.LogAttrs(context.Background(), slog.LevelInfo, "TRNG sample", slog.Int("sample", i),
 				slog.Duration("wait", time.Since(sampleStart)),
 				slog.Int("autocorrTries", tries), slog.Int("autocorrFails", fails))
 		}
-		t.rng.Seed(t.sample[:])
 	}
-	clear(t.sample[:])
-	logger.LogAttrs(ctx, slog.LevelInfo, "✓ TRNG seeded the TLS DRBG",
-		slog.Duration("took", time.Since(start)), slog.Int("healthFailures", t.trng.healthFailures),
-		slog.Int("timeouts", t.trng.timeouts))
+	s.took = time.Since(start)
+}
 
-	t.chain = roots.ISRG()
+// newTLSClient seeds the DRBG from seed, waiting for it if need be, and
+// configures certificate validation against the embedded roots on the wall
+// clock, which reads 0 and so validates nothing until NTP has set it.
+// Without entropy no handshake can be secure, so a TRNG failure halts the
+// device.
+func newTLSClient(logger *slog.Logger, apiURL apiurl.URL, clock *wallclock.Clock, fb *bufshare.Buffer, seed *trngSeed) *tlsClient {
+	t := &tlsClient{clock: clock}
+	ctx := context.Background()
+	start := time.Now()
+	<-seed.done
+	t.trng = seed.trng
+	if seed.err != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "TRNG broken; halting, as TLS needs its entropy",
+			slog.Any("error", seed.err), slog.Int("healthFailures", t.trng.healthFailures),
+			slog.Int("timeouts", t.trng.timeouts), slog.Duration("timeout", t.trng.timeout))
+	}
+	util.RequireNoError(seed.err, "seeding the TLS DRBG from the TRNG")
+	for i := range seed.blocks {
+		t.rng.Seed(seed.blocks[i][:])
+		clear(seed.blocks[i][:])
+	}
+	logger.LogAttrs(ctx, slog.LevelInfo, "✓ TRNG seeded the TLS DRBG",
+		slog.Duration("took", seed.took), slog.Duration("waited", time.Since(start)),
+		slog.Int("healthFailures", t.trng.healthFailures), slog.Int("timeouts", t.trng.timeouts))
+
+	t.chain = trustRoots()
 	vcfg := x509.VerifierConfig{
 		Roots:              &t.chain,
 		Nanotime:           clock.Nanotime,

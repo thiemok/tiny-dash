@@ -1,3 +1,5 @@
+//go:build !uartlog
+
 package main
 
 import (

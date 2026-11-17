@@ -1,3 +1,4 @@
 dist
 .env
 /internal/config/generated.go
+/cmd/picoDevice/rigca/
